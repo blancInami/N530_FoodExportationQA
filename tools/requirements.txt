@@ -1,0 +1,30 @@
+# 食品輸銷離線工具專用依賴（雙語術語擷取 + 知識文獻匯入 + 靜態資源產生）
+# 與主專案 requirements.txt 獨立，請在獨立虛擬環境中安裝：
+#   pip install -r tools/requirements.txt
+#
+# 工具一覽：
+#   ingest_agent.py           — 知識文獻離線 ETL
+#   batch_ingest_regulations.py — 批次法規匯入
+#   extract_stems.py          — 官方詞彙短詞映射產生（→ app/resources/term_mapping.json）
+#   extract_aliases.py        — 機關別名映射產生（→ app/resources/alias_mapping.json）
+#   extract_terms.py          — 雙語 PDF 配對術語擷取 → CSV
+#   db_extractor.py           — 問卷題目 HTML 術語擷取 → DB
+#   markdown_converter.py / pdf_reader.py / chunking.py / validator.py / aggregator.py
+
+# PDF 頁面處理（extract_terms.py：選取指定頁面輸出至 BytesIO）
+PyPDF2>=3.0.0
+
+# HTTP 客戶端（pdf_reader.py：上傳 PDF 至 doc-to-json API）
+requests>=2.28.0
+
+# OpenAI-compatible client（全部工具：Gemma-4 LLM 推論呼叫）
+openai>=1.0.0
+
+# Async HTTP 客戶端（ingest_agent.py：向量化批次呼叫 Embedding Server）
+httpx>=0.27.0
+
+# PostgreSQL 同步驅動（全部工具均使用同步介面，非 async）
+psycopg[binary]>=3.1
+
+# 文件轉 Markdown（ingest_agent.py / markdown_converter.py：PDF / DOCX / XLSX 轉換）
+markitdown>=0.1
