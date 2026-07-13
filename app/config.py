@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     llm_gateway_url: str = ""
 
     # Embedding Server
-    embedding_host: str = "10.166.57.21"
+    embedding_host: str = "10.166.57.22"
     embedding_port: int = 40003
     embedding_model: str = "intfloat/multilingual-e5-large-instruct"
     embedding_dim: int = 1024
@@ -25,6 +25,20 @@ class Settings(BaseSettings):
     pg_user: str = "postgres"
     pg_password: str = "postgres"
     pg_db: str = "fes"
+
+    # SQL Server 2025 (used when DB_TYPE=mssql)
+    mssql_host: str = "127.0.0.1"
+    mssql_port: int = 1433
+    mssql_user: str = "sa"
+    mssql_password: str = ""
+    mssql_db: str = "fes"
+    mssql_driver: str = "ODBC Driver 18 for SQL Server"
+    mssql_trust_cert: bool = False
+
+    # Database Backend  ("postgres" | "mssql")
+    db_type: str = "postgres"
+    # Schema name — "public" for PostgreSQL, "dbo" for SQL Server
+    db_schema: str = "public"
 
     # Retrieval Parameters
     similarity_threshold: float = 0.75
@@ -72,6 +86,14 @@ class Settings(BaseSettings):
 
     @property
     def dsn(self) -> str:
+        if self.db_type.lower() == "mssql":
+            driver = self.mssql_driver.replace(" ", "+")
+            trust = "&TrustServerCertificate=yes" if self.mssql_trust_cert else ""
+            return (
+                f"mssql+aioodbc://{self.mssql_user}:{self.mssql_password}"
+                f"@{self.mssql_host}:{self.mssql_port}/{self.mssql_db}"
+                f"?driver={driver}{trust}"
+            )
         return (
             f"postgresql+psycopg://{self.pg_user}:{self.pg_password}"
             f"@{self.pg_host}:{self.pg_port}/{self.pg_db}"

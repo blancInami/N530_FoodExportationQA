@@ -20,9 +20,10 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.db_dialect import cosine_distance_expr
 from app.models import (
     問卷主檔, 問卷題目切塊, 問卷題目檔, 問卷附件檔,
-    知識文獻主檔, 文獻節點檔, 文獻切塊檔,
+    知識文獻主檔, 知識文獻節點檔, 知識文獻切塊檔,
 )
 from app.services.embedding import get_embedding
 
@@ -78,7 +79,7 @@ async def hybrid_retrieve(
     t = 問卷題目切塊
 
     # CTE 1: chunk_hits — cosine distance on embedding (single vector), LIMIT top_k
-    chunk_dist = t.c["embedding"].cosine_distance(query_vector).label("distance")
+    chunk_dist = cosine_distance_expr(t.c["embedding"], query_vector).label("distance")
     chunk_hits = (
         select(
             t.c["主鍵"].label("chunk_pk"),
@@ -221,14 +222,14 @@ async def hybrid_retrieve(
 
     knowledge_rows: list = []
     try:
-        kc = 文獻切塊檔
+        kc = 知識文獻切塊檔
 
         # CTE K1: knowledge_hits — cosine distance on 內容向量
-        knowledge_dist = kc.c["內容向量"].cosine_distance(query_vector).label("distance")
+        knowledge_dist = cosine_distance_expr(kc.c["內容向量"], query_vector).label("distance")
         knowledge_hits = (
             select(
                 kc.c["主鍵"].label("chunk_pk"),
-                kc.c["文獻節點檔主鍵"],
+                kc.c["知識文獻節點檔主鍵"],
                 kc.c["切塊索引"],
                 knowledge_dist,
             )
@@ -240,11 +241,11 @@ async def hybrid_retrieve(
         # CTE K2: knowledge_agg — GROUP BY node+chunk, MIN distance, HAVING, LIMIT
         knowledge_agg = (
             select(
-                knowledge_hits.c["文獻節點檔主鍵"],
+                knowledge_hits.c["知識文獻節點檔主鍵"],
                 knowledge_hits.c["切塊索引"],
                 func.min(knowledge_hits.c["distance"]).label("min_distance"),
             )
-            .group_by(knowledge_hits.c["文獻節點檔主鍵"], knowledge_hits.c["切塊索引"])
+            .group_by(knowledge_hits.c["知識文獻節點檔主鍵"], knowledge_hits.c["切塊索引"])
             .having(func.min(knowledge_hits.c["distance"]) <= threshold)
             .order_by(func.min(knowledge_hits.c["distance"]))
             .limit(effective_top_n)
@@ -261,7 +262,7 @@ async def hybrid_retrieve(
         # CTE K4: knowledge_expanded — CROSS JOIN knowledge_agg × knowledge_adj
         knowledge_expanded = (
             select(
-                knowledge_agg.c["文獻節點檔主鍵"],
+                knowledge_agg.c["知識文獻節點檔主鍵"],
                 (knowledge_agg.c["切塊索引"] + knowledge_adj.c["v"]).label("neighbor_idx"),
                 knowledge_agg.c["min_distance"],
             )
@@ -269,11 +270,11 @@ async def hybrid_retrieve(
             .cte("knowledge_expanded")
         )
 
-        # CTE K5: knowledge_expanded_chunks — join back to 文獻切塊檔 for actual text
+        # CTE K5: knowledge_expanded_chunks — join back to 知識文獻切塊檔 for actual text
         knowledge_expanded_chunks = (
             select(
                 kc.c["主鍵"].label("chunk_pk"),
-                kc.c["文獻節點檔主鍵"],
+                kc.c["知識文獻節點檔主鍵"],
                 kc.c["切塊索引"],
                 kc.c["切塊內容"],
                 knowledge_expanded.c["min_distance"],
@@ -281,7 +282,7 @@ async def hybrid_retrieve(
             .select_from(
                 knowledge_expanded.join(
                     kc,
-                    (kc.c["文獻節點檔主鍵"] == knowledge_expanded.c["文獻節點檔主鍵"])
+                    (kc.c["知識文獻節點檔主鍵"] == knowledge_expanded.c["知識文獻節點檔主鍵"])
                     & (kc.c["切塊索引"] == knowledge_expanded.c["neighbor_idx"]),
                 )
             )
@@ -289,13 +290,13 @@ async def hybrid_retrieve(
             .cte("knowledge_expanded_chunks")
         )
 
-        # CTE K6: knowledge_final — JOIN 文獻節點檔 (is_deleted=0/NULL) → JOIN 知識文獻主檔
-        kn = 文獻節點檔
+        # CTE K6: knowledge_final — JOIN 知識文獻節點檔 (is_deleted=0/NULL) → JOIN 知識文獻主檔
+        kn = 知識文獻節點檔
         km = 知識文獻主檔
         knowledge_final_cte = (
             select(
                 knowledge_expanded_chunks.c["chunk_pk"],
-                knowledge_expanded_chunks.c["文獻節點檔主鍵"],
+                knowledge_expanded_chunks.c["知識文獻節點檔主鍵"],
                 knowledge_expanded_chunks.c["切塊索引"],
                 knowledge_expanded_chunks.c["切塊內容"],
                 knowledge_expanded_chunks.c["min_distance"],
@@ -305,7 +306,7 @@ async def hybrid_retrieve(
             .select_from(
                 knowledge_expanded_chunks.join(
                     kn,
-                    (kn.c["主鍵"] == knowledge_expanded_chunks.c["文獻節點檔主鍵"])
+                    (kn.c["主鍵"] == knowledge_expanded_chunks.c["知識文獻節點檔主鍵"])
                     & (
                         (kn.c["是否刪除"].is_(None)) | (kn.c["是否刪除"] == 0)
                     ),
@@ -322,7 +323,7 @@ async def hybrid_retrieve(
         knowledge_stmt = (
             select(
                 knowledge_final_cte.c["chunk_pk"],
-                knowledge_final_cte.c["文獻節點檔主鍵"],
+                knowledge_final_cte.c["知識文獻節點檔主鍵"],
                 knowledge_final_cte.c["切塊索引"],
                 knowledge_final_cte.c["切塊內容"],
                 knowledge_final_cte.c["min_distance"],
@@ -383,7 +384,7 @@ async def hybrid_retrieve(
         final_k_rows = sorted(knowledge_rows, key=lambda r: r["min_distance"])[:effective_top_n]
 
     logger.info(
-        "全局合併後：問卷切塊=%d  知識文獻切塊=%d  共 %d 筆",
+        "全局合併後：問卷切塊=%d  知識知識文獻切塊=%d  共 %d 筆",
         len(final_q_rows), len(final_k_rows), len(final_q_rows) + len(final_k_rows),
     )
 

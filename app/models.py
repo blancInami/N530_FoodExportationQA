@@ -1,7 +1,12 @@
-"""
+﻿"""
 SQLAlchemy 2.0 Core table definitions for all 10 database tables.
 Uses Table() + MetaData — NOT ORM DeclarativeBase.
+
+Dual-backend support (PostgreSQL + SQL Server 2025):
+  - Column types use .with_variant() so the correct DDL/binding is used per dialect.
+  - Schema is read from DB_SCHEMA env var ("public" for PG, "dbo" for MSSQL).
 """
+import os
 import uuid
 
 from sqlalchemy import (
@@ -18,8 +23,15 @@ from sqlalchemy import (
     func,
     text,
 )
+from sqlalchemy.dialects import mssql
 from sqlalchemy.dialects.postgresql import JSONB, UUID, ARRAY
 from pgvector.sqlalchemy import Vector
+
+from app.db_dialect import MssqlVector, MssqlArrayString
+
+# Schema is overrideable via DB_SCHEMA env var.
+# PostgreSQL default: "public"; SQL Server default: "dbo"
+_DB_SCHEMA = os.environ.get("DB_SCHEMA", "public")
 
 metadata = MetaData()
 
@@ -42,7 +54,7 @@ metadata = MetaData()
     Column("建立日期", DateTime),
     Column("修改人員", String(50)),
     Column("修改日期", DateTime),
-    schema="public",
+    schema=_DB_SCHEMA,
 )
 
 # ─── 問卷題目檔 ──────────────────────────────────────────────
@@ -64,21 +76,24 @@ metadata = MetaData()
     Column("建立日期", DateTime, nullable=False),
     Column("修改人員", String(50)),
     Column("修改日期", DateTime),
-    schema="public",
+    schema=_DB_SCHEMA,
 )
 
 # ─── 問卷題目切塊 ─────────────────────────────────────────────
 問卷題目切塊 = Table(
     "問卷題目切塊",
     metadata,
-    Column("主鍵", UUID(as_uuid=True), primary_key=True, default=uuid.uuid4),
+    Column("主鍵",
+           UUID(as_uuid=True).with_variant(mssql.UNIQUEIDENTIFIER(), "mssql"),
+           primary_key=True, default=uuid.uuid4),
     Column("問卷題目檔主鍵", String(40)),
     Column("chunk_source", String(50), nullable=False),  # 'question' | 'answer'
     Column("chunk_text", String),
-    Column("embedding", Vector(1024)),
+    Column("embedding",
+           Vector(1024).with_variant(MssqlVector(1024), "mssql")),
     Column("切塊索引", Integer, nullable=False),
     Column("詞元數量", Integer),
-    schema="public",
+    schema=_DB_SCHEMA,
 )
 
 # ─── 問卷附件檔 ──────────────────────────────────────────────
@@ -96,7 +111,7 @@ metadata = MetaData()
     Column("修改人員", String(50)),
     Column("修改日期", DateTime),
     Column("檔案路徑", String(500)),
-    schema="public",
+    schema=_DB_SCHEMA,
 )
 
 # ─── 問卷原始檔 ──────────────────────────────────────────────
@@ -114,7 +129,7 @@ metadata = MetaData()
     Column("修改人員", String(50)),
     Column("修改日期", DateTime),
     Column("檔案路徑", String(500)),
-    schema="public",
+    schema=_DB_SCHEMA,
 )
 
 # ─── 單位對照表 ──────────────────────────────────────────────
@@ -124,8 +139,9 @@ metadata = MetaData()
     Column("機關", String),
     Column("單位", String),
     Column("分工關鍵字", String),
-    Column("擴充關鍵字", ARRAY(String)),
-    schema="public",
+    Column("擴充關鍵字",
+           ARRAY(String).with_variant(MssqlArrayString(), "mssql")),
+    schema=_DB_SCHEMA,
 )
 
 # ─── 官方正規詞彙 ─────────────────────────────────────────────
@@ -134,7 +150,7 @@ metadata = MetaData()
     metadata,
     Column("中文字詞", String),
     Column("英文字詞", String),
-    schema="public",
+    schema=_DB_SCHEMA,
 )
 
 # ─── 知識文獻主檔 ──────────────────────────────────────────────
@@ -148,13 +164,13 @@ metadata = MetaData()
     Column("原始檔案路徑", String(500)),
     Column("是否刪除", Integer, server_default=text("0")),
     Column("建立日期", DateTime, nullable=False, server_default=func.now()),
-    schema="public",
+    schema=_DB_SCHEMA,
 )
 
-# ─── 文獻節點檔 ───────────────────────────────────────────────
+# ─── 知識文獻節點檔 ───────────────────────────────────────────────
 # LLM 從 Markdown 萃取的結構化節點（章節 / 條號 / Q&A）
-文獻節點檔 = Table(
-    "文獻節點檔",
+知識文獻節點檔 = Table(
+    "知識文獻節點檔",
     metadata,
     Column("主鍵", String(40), primary_key=True),
     Column("文獻主檔主鍵", String(40), nullable=False),
@@ -163,21 +179,24 @@ metadata = MetaData()
     Column("排序索引", Integer, nullable=False, server_default=text("1")),
     Column("是否刪除", Integer, server_default=text("0")),
     Column("建立日期", DateTime, nullable=False, server_default=func.now()),
-    schema="public",
+    schema=_DB_SCHEMA,
 )
 
-# ─── 文獻切塊檔 ───────────────────────────────────────────────
+# ─── 知識文獻切塊檔 ───────────────────────────────────────────────
 # 節點內容的滑動視窗切塊 + 1024-dim 向量，由 tools/ingest_agent.py 自動管理
-文獻切塊檔 = Table(
-    "文獻切塊檔",
+知識文獻切塊檔 = Table(
+    "知識文獻切塊檔",
     metadata,
-    Column("主鍵", UUID(as_uuid=True), primary_key=True, default=uuid.uuid4),
-    Column("文獻節點檔主鍵", String(40), nullable=False),
+    Column("主鍵",
+           UUID(as_uuid=True).with_variant(mssql.UNIQUEIDENTIFIER(), "mssql"),
+           primary_key=True, default=uuid.uuid4),
+    Column("知識文獻節點檔主鍵", String(40), nullable=False),
     Column("切塊內容", String),
-    Column("內容向量", Vector(1024)),
+    Column("內容向量",
+           Vector(1024).with_variant(MssqlVector(1024), "mssql")),
     Column("切塊索引", Integer, nullable=False),
     Column("詞元數量", Integer),
-    schema="public",
+    schema=_DB_SCHEMA,
 )
 
 # ─── 查詢紀錄 ──────────────────────────────────────────────
@@ -185,22 +204,29 @@ metadata = MetaData()
 查詢紀錄 = Table(
     "查詢紀錄",
     metadata,
-    Column("主鍵", UUID(as_uuid=True), primary_key=True, default=uuid.uuid4),
+    Column("主鍵",
+           UUID(as_uuid=True).with_variant(mssql.UNIQUEIDENTIFIER(), "mssql"),
+           primary_key=True, default=uuid.uuid4),
     Column("查詢時間", DateTime, nullable=False, server_default=func.now()),
     Column("原始問題", Text, nullable=False),
-    Column("是否中文", Boolean, nullable=False),
+    Column("是否中文",
+           Boolean.with_variant(mssql.BIT(), "mssql"),
+           nullable=False),
     Column("中文譯文", Text),
     Column("意圖分類方式", String(20)),         # 'aho-corasick' | 'llm_fallback' | 'none'
     Column("負責機關", String(200)),
     Column("負責單位", String(200)),
-    Column("命中術語", JSONB),                  # {中文: 英文, ...}
+    Column("命中術語",
+           JSONB.with_variant(mssql.JSON(), "mssql")),   # {中文: 英文, ...}
     Column("enriched_query", Text),
     Column("similarity_threshold", Float),
     Column("top_n", Integer),
     Column("問卷命中數", Integer),
     Column("知識命中數", Integer),
-    Column("參考來源", JSONB),
-    Column("知識參考來源", JSONB),
+    Column("參考來源",
+           JSONB.with_variant(mssql.JSON(), "mssql")),
+    Column("知識參考來源",
+           JSONB.with_variant(mssql.JSON(), "mssql")),
     Column("raw_context", Text),
     Column("knowledge_context", Text),
     Column("dictionary_xml", Text),
@@ -210,5 +236,5 @@ metadata = MetaData()
     Column("中文回覆", Text),
     Column("耗時毫秒", Float),
     Column("錯誤訊息", Text),
-    schema="public",
+    schema=_DB_SCHEMA,
 )

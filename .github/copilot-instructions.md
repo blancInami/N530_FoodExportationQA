@@ -93,7 +93,7 @@ tools/
 ```
 
 > **tools/ 規則**：使用同步 `psycopg`（非 async）、`openai.OpenAI`（非 AsyncClient）。
-> 不得引用 `app/` 任何模組。LLM Server：`http://10.166.57.22:40039/v1`，model=`gemma-4-26B-A4B-it`。
+> 不得引用 `app/` 任何模組。LLM Server：`http://10.166.57.22:40041/v1`，model=`gemma-4-26B-A4B-it-mtp`。
 
 ---
 
@@ -205,8 +205,8 @@ CREATE TABLE IF NOT EXISTS public."知識文獻主檔" (
     "建立日期"     timestamp NOT NULL DEFAULT now()
 );
 
--- 文獻節點檔：文獻的邏輯節點（章節 / 條號 / QA 項）
-CREATE TABLE IF NOT EXISTS public."文獻節點檔" (
+-- 知識文獻節點檔：文獻的邏輯節點（章節 / 條號 / QA 項）
+CREATE TABLE IF NOT EXISTS public."知識文獻節點檔" (
     "主鍵"         character varying(40) PRIMARY KEY,
     "文獻主檔主鍵" character varying(40) NOT NULL,
     "節點標題路徑" character varying(500) NOT NULL,
@@ -216,10 +216,10 @@ CREATE TABLE IF NOT EXISTS public."文獻節點檔" (
     "建立日期"     timestamp NOT NULL DEFAULT now()
 );
 
--- 文獻切塊檔：向量化後的切塊資料（由 tools/ingest_agent.py 離線寫入）
-CREATE TABLE IF NOT EXISTS public."文獻切塊檔" (
+-- 知識文獻切塊檔：向量化後的切塊資料（由 tools/ingest_agent.py 離線寫入）
+CREATE TABLE IF NOT EXISTS public."知識文獻切塊檔" (
     "主鍵"         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    "文獻節點檔主鍵" character varying(40) NOT NULL,
+    "知識文獻節點檔主鍵" character varying(40) NOT NULL,
     "切塊內容"     character varying,
     "內容向量"     vector(1024),
     "切塊索引"     integer NOT NULL,
@@ -295,13 +295,13 @@ Phase 2 ：Embed enriched_query → 1024-dim 向量；雙軌並行 SQLAlchemy Co
    col.in_(master_pks) → JOIN 問卷附件檔 取 檔案路徑（全參數化）
    raw_context 組裝時以問卷題目檔主鍵去重（多切塊→同題只取一次完整 Q/A 原文）
 
-   Track B 知識文獻庫（出自文獻切塊檔）：
+   Track B 知識文獻庫（出自知識文獻切塊檔）：
    knowledge_hits CTE          (cosine_distance 內容向量, LIMIT top_k)
    knowledge_agg CTE           (GROUP BY, MIN distance, HAVING <= threshold, LIMIT top_n)
    knowledge_adj CTE           (VALUES -1/0/1)
    knowledge_expanded CTE      (CROSS JOIN knowledge_agg × knowledge_adj)
-   knowledge_expanded_chunks CTE (JOIN 文獻切塊檔 取切塊內容)
-   knowledge_final CTE         (JOIN 文獻節點檔 取節點標題路徑) → JOIN 知識文獻主檔 取文獻名稱/文獻類型
+   knowledge_expanded_chunks CTE (JOIN 知識文獻切塊檔 取切塊內容)
+   knowledge_final CTE         (JOIN 知識文獻節點檔 取節點標題路徑) → JOIN 知識文獻主檔 取文獻名稱/文獻類型
    Track B 結果產生 knowledge_context（依 REGULATION/GUIDELINE/QA 類型格式化 XML 區塊）
 
    Python 層全局合並：依 `settings.retrieval_merge_mode` 決定策略
@@ -325,7 +325,7 @@ Phase 4 ：s2t(中文回覆) 確保正體中文；回傳 9 欄位扁平化 AskRe
 3. 每個 macro_chunk → Gemma-4 LLM → JSON nodes（節點標題路徑 + 節點內容 + 文獻類型）
    降級 B：LLM 萃取 0 節點 且尚未使用過 doc-to-json → 改用 doc-to-json 重試（僅 PDF）
 4. 多數決 doc_type 寫入知識文獻主檔
-5. 每個節點 → sliding_window_chunk → get_embeddings_batch → INSERT 文獻節點檔 + 文獻切塊檔
+5. 每個節點 → sliding_window_chunk → get_embeddings_batch → INSERT 知識文獻節點檔 + 知識文獻切塊檔
 ```
 
 ## tools/batch_ingest_regulations.py 批次匯入管線
@@ -386,7 +386,7 @@ Returns: choices[0].message.content (str)
 ## 環境變數（完整列表）
 
 ```env
-EMBEDDING_HOST=10.166.57.21
+EMBEDDING_HOST=10.166.57.22
 EMBEDDING_PORT=40003
 EMBEDDING_MODEL=intfloat/multilingual-e5-large-instruct
 EMBEDDING_DIM=1024
@@ -413,5 +413,5 @@ CHUNK_SIZE=500
 CHUNK_OVERLAP=50
 
 # doc-to-json 降級 API（ingest_agent.py 備援用，主應用不使用）
-DOC2JSON_API_URL=http://10.88.91.72:43002/api/doc-to-json/run
+DOC2JSON_API_URL=http://10.166.57.22:43002/api/doc-to-json/run
 ```

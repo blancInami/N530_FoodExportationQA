@@ -133,7 +133,7 @@ async def _translate_to_chinese(
         "3. **Phase 1c — 術語特徵擴增**：比對官方正規詞彙（6000+ 筆），命中前 5 筆術語注入查詢以提升向量搜尋精度。\n"
         "4. **Phase 2 — 雙軌混合檢索**：\n"
         "   - **Track A（問卷庫）**：對「問卷題目切塊」執行 cosine distance 向量搜尋，展開相鄰切塊後彙整參考來源。\n"
-        "   - **Track B（知識文獻庫）**：對「文獻切塊檔」執行向量搜尋，命中結果依文獻類型（REGULATION／GUIDELINE／QA）格式化。\n"
+        "   - **Track B（知識文獻庫）**：對「知識文獻切塊檔」執行向量搜尋，命中結果依文獻類型（REGULATION／GUIDELINE／QA）格式化。\n"
         "   - 兩軌合併策略由環境變數 `RETRIEVAL_MERGE_MODE` 控制（`independent`：各自保留 top_n；`compete`：混排共用名額）。\n"
         "5. **Phase 3 — LLM 雙語生成**：以歷史問答 context、知識文獻 context 及術語字典組裝 prompt，呼叫 LLM 生成英文與正體中文回覆。\n"
         "6. **Phase 4 — 回應組裝**：扁平化回傳負責單位、雙語回覆、附件超連結及所有參考來源。\n\n"
