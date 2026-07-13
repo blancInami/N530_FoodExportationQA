@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-TW">
 <head>
   <meta charset="UTF-8" />
@@ -90,12 +90,7 @@
     pre .kw  { color: #7dd3fc; }
     pre .fn  { color: #86efac; }
     pre .st  { color: #fcd34d; }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-bottom: 20px;
-      font-size: 0.93rem;
-    }
+    table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 0.93rem; }
     th {
       background: var(--accent);
       color: white;
@@ -103,7 +98,7 @@
       text-align: left;
       font-weight: 600;
     }
-    td { padding: 9px 14px; border-bottom: 1px solid var(--border); }
+    td { padding: 9px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
     tr:hover td { background: var(--accent-light); }
     .badge {
       display: inline-block;
@@ -112,10 +107,10 @@
       font-size: 0.78em;
       font-weight: 600;
     }
-    .badge-blue  { background: var(--accent-light);  color: var(--accent); }
-    .badge-green { background: var(--accent2-light); color: var(--accent2); }
-    .badge-warn  { background: var(--warn-light);   color: var(--warn); }
-    .badge-red   { background: var(--red-light);    color: var(--red); }
+    .badge-blue   { background: var(--accent-light);  color: var(--accent); }
+    .badge-green  { background: var(--accent2-light); color: var(--accent2); }
+    .badge-warn   { background: var(--warn-light);    color: var(--warn); }
+    .badge-red    { background: var(--red-light);     color: var(--red); }
     .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
     .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
     .card {
@@ -130,23 +125,13 @@
       padding: 12px 16px;
       border-radius: 0 6px 6px 0;
       margin-bottom: 16px;
+      font-size: 0.92rem;
     }
-    .alert-warn  { border-color: var(--warn);  background: var(--warn-light); }
-    .alert-info  { border-color: var(--accent); background: var(--accent-light); }
+    .alert-warn  { border-color: var(--warn);   background: var(--warn-light); }
+    .alert-info  { border-color: var(--accent);  background: var(--accent-light); }
     .alert-green { border-color: var(--accent2); background: var(--accent2-light); }
-
-    /* ─── Pipeline Diagram ──────────────────────────────────────────────── */
-    .pipeline {
-      display: flex;
-      flex-direction: column;
-      gap: 0;
-      margin: 24px 0;
-    }
-    .phase {
-      display: flex;
-      align-items: stretch;
-      gap: 0;
-    }
+    .pipeline { display: flex; flex-direction: column; gap: 0; margin: 24px 0; }
+    .phase { display: flex; align-items: stretch; gap: 0; }
     .phase-label {
       width: 90px;
       flex-shrink: 0;
@@ -164,8 +149,8 @@
     }
     .phase-label.green  { background: var(--accent2); }
     .phase-label.warn   { background: var(--warn); }
-    .phase-label.red    { background: var(--red); }
     .phase-label.gray   { background: #64748b; }
+    .phase-label.purple { background: #7c3aed; }
     .phase-body {
       flex: 1;
       background: var(--surface);
@@ -178,13 +163,38 @@
     .phase-body strong { color: var(--accent); }
     .phase-body ul { margin: 6px 0 0 18px; }
     .phase-body ul li { margin-bottom: 3px; }
-    .arrow {
-      text-align: center;
-      color: var(--muted);
-      font-size: 1.3rem;
-      padding: 2px 0;
+    .arrow { text-align: center; color: var(--muted); font-size: 1.3rem; padding: 2px 0; }
+    .folder-tree {
+      font-family: 'Consolas', 'Cascadia Code', monospace;
+      line-height: 1.8;
+      list-style-type: none;
+      padding-left: 0;
+      font-size: 0.9rem;
     }
-    /* Forbidden table */
+    .folder-tree ul {
+      list-style-type: none;
+      padding-left: 24px;
+      border-left: 1px dashed var(--border);
+      margin-left: 8px;
+    }
+    .folder-tree .folder { font-weight: bold; color: var(--text); }
+    .folder-tree .file   { color: var(--accent); }
+    .folder-tree .desc {
+      color: var(--muted);
+      margin-left: 12px;
+      font-size: 0.85em;
+      font-family: 'Segoe UI', 'Microsoft JhengHei', sans-serif;
+    }
+    .mermaid-wrap {
+      background: #ffffff;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 24px 16px;
+      margin: 12px 0 16px;
+      overflow-x: auto;
+      text-align: center;
+    }
+    .mermaid-wrap svg { background: #ffffff !important; }
     .forbidden { color: var(--red); }
     @media (max-width: 768px) {
       header { padding: 24px 20px; }
@@ -204,6 +214,7 @@
 <nav>
   <a href="#overview">系統概述</a>
   <a href="#stack">技術棧</a>
+  <a href="#structure">目錄結構</a>
   <a href="#pipeline">問答管線</a>
   <a href="#retrieval">向量檢索</a>
   <a href="#merge-mode">合併模式</a>
@@ -212,6 +223,7 @@
   <a href="#db">資料庫</a>
   <a href="#modules">模組說明</a>
   <a href="#tools">離線工具</a>
+  <a href="#dual-backend">雙後端支援</a>
   <a href="#conventions">開發規範</a>
 </nav>
 
@@ -219,7 +231,7 @@
 
 <!-- ═══ 1. 系統概述 ═══════════════════════════════════════════════════════ -->
 <section id="overview">
-  <h2>系統概述</h2>
+  <h2>1. 系統概述</h2>
   <p>
     本系統為食品輸銷知識問答平台，基於 <strong>RAG（Retrieval-Augmented Generation）</strong>
     架構，整合向量資料庫、Aho-Corasick 自動機、大型語言模型與官方雙語術語字典，
@@ -227,29 +239,29 @@
   </p>
   <div class="grid-3">
     <div class="card">
-      <h4>🔍 輸入處理</h4>
+      <h4>輸入處理</h4>
       <p>支援中英文混合輸入。英文自動 LLM 翻譯後進入中文語境的意圖分類與向量搜尋。DictionaryMatcher 其後會對查詢進行特徵擴增。</p>
     </div>
     <div class="card">
-      <h4>🗄️ 雙軌知識檢索</h4>
-      <p>Track A：PostgreSQL + pgvector 雙路徑向量搜尋（題目 + 回覆）。Track B：知識文獻庫內容向量搜尋，依文獻類型（REGULATION / GUIDELINE / QA）格式化 XML 區塊。兩軌結果 Python 層依距離全局合並。</p>
+      <h4>雙軌知識檢索</h4>
+      <p>Track A：PostgreSQL + pgvector 單向量搜尋（chunk_source 區分題目/回覆）。Track B：知識文獻庫內容向量搜尋，依文獻類型（REGULATION / GUIDELINE / QA）格式化 XML 區塊。兩軌結果 Python 層依距離全局合並。</p>
     </div>
     <div class="card">
-      <h4>🤖 雙語生成</h4>
-      <p>DictionaryMatcher 動態篩選命中術語，如有知識文獻命中則附加 &lt;Knowledge_References&gt; 區塊，以 XML Prompt 注入 LLM，生成英文 + 繁體中文雙語回覆。</p>
+      <h4>雙語生成</h4>
+      <p>DictionaryMatcher 動態篩選命中術語，如有知識文獻命中則附加 &lt;Knowledge_References&gt; 區塊，以 XML Prompt 注入 LLM，生成英文 + 繁體中文雙語回覆。每次問答完整記錄至 <code>查詢紀錄</code> 資料表。</p>
     </div>
   </div>
 </section>
 
 <!-- ═══ 2. 技術棧 ══════════════════════════════════════════════════════════ -->
 <section id="stack">
-  <h2>技術棧</h2>
+  <h2>2. 技術棧</h2>
   <table>
     <tr><th>類別</th><th>套件 / 說明</th></tr>
     <tr><td>Web Framework</td><td><code>fastapi</code> 0.115、<code>uvicorn</code></td></tr>
-    <tr><td>Async DB Driver</td><td><code>psycopg[binary]&gt;=3.1</code></td></tr>
+    <tr><td>Async DB Driver</td><td><code>psycopg[binary]&gt;=3.1</code>（PostgreSQL）；<code>aioodbc</code>（SQL Server 2025）</td></tr>
     <tr><td>ORM / Query Builder</td><td><code>sqlalchemy[asyncio]&gt;=2.0</code>（Core only，禁止 ORM）</td></tr>
-    <tr><td>向量型別</td><td><code>pgvector&gt;=0.3.6</code>（<code>pgvector.sqlalchemy.Vector</code>）</td></tr>
+    <tr><td>向量型別</td><td><code>pgvector&gt;=0.3.6</code>（PostgreSQL）；SQL Server 2025 原生 <code>VECTOR(1024)</code></td></tr>
     <tr><td>Schema 驗證</td><td><code>pydantic</code> v2、<code>pydantic-settings</code></td></tr>
     <tr><td>HTTP Client</td><td><code>httpx</code>（async）</td></tr>
     <tr><td>Token 計數</td><td><code>tiktoken</code>（cl100k_base）</td></tr>
@@ -258,15 +270,93 @@
     <tr><td>Embedding 模型</td><td><code>intfloat/multilingual-e5-large-instruct</code>（1024-dim）</td></tr>
     <tr><td>LLM 模型</td><td><code>gpt-oss-20b</code>（主應用）、<code>gemma-4-26B-A4B-it-mtp</code>（離線工具）</td></tr>
     <tr><td>Python 版本</td><td>3.11+</td></tr>
+    <tr><td>資料庫後端</td><td><code>DB_TYPE=postgres</code>（預設）或 <code>mssql</code>；由 <code>app/db_dialect.py</code> 抽象型別差異</td></tr>
   </table>
 </section>
 
-<!-- ═══ 3. 問答管線 ════════════════════════════════════════════════════════ -->
+<!-- ═══ 3. 目錄結構 ════════════════════════════════════════════════════════ -->
+<section id="structure">
+  <h2>3. 目錄結構</h2>
+  <div class="grid-2">
+    <div class="card">
+      <h4>app/ — 主應用</h4>
+      <ul class="folder-tree">
+        <li><span class="file">📄 config.py</span><span class="desc">Pydantic Settings，DSN / DB_TYPE 切換</span></li>
+        <li><span class="file">📄 database.py</span><span class="desc">create_async_engine + async_sessionmaker</span></li>
+        <li><span class="file">📄 db_dialect.py</span><span class="desc">MssqlVector / MssqlArrayString / cosine_distance_expr()</span></li>
+        <li><span class="file">📄 dependencies.py</span><span class="desc">get_db_session() FastAPI Depends</span></li>
+        <li><span class="file">📄 logging_config.py</span><span class="desc">結構化 logging 初始化</span></li>
+        <li><span class="file">📄 models.py</span><span class="desc">SQLAlchemy Core Table() 定義（11 張資料表）</span></li>
+        <li><span class="folder">📁 resources/</span>
+          <ul>
+            <li><span class="file">📄 alias_mapping.json</span><span class="desc">機關別名（tools/extract_aliases.py 產出）</span></li>
+            <li><span class="file">📄 term_mapping.json</span><span class="desc">短詞映射（tools/extract_stems.py 產出）</span></li>
+          </ul>
+        </li>
+        <li><span class="folder">📁 routers/</span>
+          <ul>
+            <li><span class="file">📄 qa.py</span><span class="desc">POST/GET /api/v1/qa/ask, ingest, breakdown</span></li>
+            <li><span class="file">📄 translate.py</span><span class="desc">POST /api/v1/translation/re-translate</span></li>
+          </ul>
+        </li>
+        <li><span class="folder">📁 schemas/</span>
+          <ul>
+            <li><span class="file">📄 qa.py</span><span class="desc">AskRequest / AskResponse / IngestRequest</span></li>
+            <li><span class="file">📄 translate.py</span><span class="desc">TranslateRequest / TranslateResponse</span></li>
+            <li><span class="file">📄 breakdown.py</span><span class="desc">BreakdownItem</span></li>
+          </ul>
+        </li>
+        <li><span class="folder">📁 services/</span>
+          <ul>
+            <li><span class="file">📄 embedding.py</span><span class="desc">get_embedding() / get_embeddings_batch()</span></li>
+            <li><span class="file">📄 llm.py</span><span class="desc">chat_completion()</span></li>
+            <li><span class="file">📄 intent.py</span><span class="desc">IntentClassifier 雙層意圖分類</span></li>
+            <li><span class="file">📄 retrieval.py</span><span class="desc">hybrid_retrieve() Track A + Track B</span></li>
+            <li><span class="file">📄 ingest.py</span><span class="desc">ingest_questionnaire() 問卷向量化</span></li>
+            <li><span class="file">📄 translate.py</span><span class="desc">translate_with_dictionary()</span></li>
+            <li><span class="file">📄 breakdown.py</span><span class="desc">extract_questions() / convert_file_to_markdown()</span></li>
+            <li><span class="file">📄 query_log.py</span><span class="desc">save_query_log() 問答紀錄寫入（fire-and-forget）</span></li>
+          </ul>
+        </li>
+        <li><span class="folder">📁 utils/</span>
+          <ul>
+            <li><span class="file">📄 __init__.py</span><span class="desc">sanitize_text_for_db() / sliding_window_chunk() / normalize_for_matching()</span></li>
+            <li><span class="file">📄 dictionary.py</span><span class="desc">DictionaryMatcher + Aho-Corasick</span></li>
+            <li><span class="file">📄 connection_manager.py</span><span class="desc">monitor_disconnect() / run_interruptible()</span></li>
+            <li><span class="file">📄 opencc_converter.py</span><span class="desc">s2t() 繁簡轉換</span></li>
+          </ul>
+        </li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>tools/ — 離線工具</h4>
+      <ul class="folder-tree">
+        <li><span class="file">📄 ingest_agent.py</span><span class="desc">文件 → Markdown → LLM → 知識文獻三表</span></li>
+        <li><span class="file">📄 batch_ingest_regulations.py</span><span class="desc">批次掃描法規資料夾</span></li>
+        <li><span class="file">📄 extract_terms.py</span><span class="desc">PDF 配對 → 術語擷取 → CSV</span></li>
+        <li><span class="file">📄 extract_stems.py</span><span class="desc">官方術語 → 短詞映射 → term_mapping.json</span></li>
+        <li><span class="file">📄 extract_aliases.py</span><span class="desc">分工關鍵字 → 別名 → alias_mapping.json</span></li>
+        <li><span class="file">📄 db_extractor.py</span><span class="desc">問卷 HTML → LLM 擷取 → 官方正規詞彙</span></li>
+        <li><span class="file">📄 db_utils.py</span><span class="desc">get_connection() / PLACEHOLDER / get_schema()</span></li>
+        <li><span class="file">📄 expand_keywords.py</span><span class="desc">分工關鍵字擴充</span></li>
+        <li><span class="file">📄 llm_client.py</span><span class="desc">extract_terms_from_chunk() (Gemma 4)</span></li>
+        <li><span class="file">📄 markdown_converter.py</span><span class="desc">markitdown 同步封裝</span></li>
+        <li><span class="file">📄 pdf_reader.py</span><span class="desc">doc-to-json API 讀取 PDF</span></li>
+        <li><span class="file">📄 chunking.py</span><span class="desc">chunk_by_structure() / chunk_text()</span></li>
+        <li><span class="file">📄 file_pairing.py</span><span class="desc">discover_pdf_pairs() 遞迴配對</span></li>
+        <li><span class="file">📄 validator.py</span><span class="desc">反向驗證（子字串比對）</span></li>
+        <li><span class="file">📄 aggregator.py</span><span class="desc">詞彙頻率聚合 + CSV 匯出</span></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 4. 問答管線 ════════════════════════════════════════════════════════ -->
 <section id="pipeline">
-  <h2>問答管線（/qa/ask）</h2>
+  <h2>4. 問答管線（/qa/ask）</h2>
   <p>
     問答請求依序經過四大階段（Phase 1 細分 a/b/c 三層），各階段均為非同步操作，
-    最終回傳 9 欄位扁平化 <code>AskResponse</code>。
+    最終回傳 9 欄位扁平化 <code>AskResponse</code>。完成後 fire-and-forget 寫入 <code>查詢紀錄</code>。
   </p>
 
   <div class="pipeline">
@@ -280,14 +370,14 @@
         </ul>
         <strong>1b — 意圖分類（雙層）</strong>
         <ul>
-          <li><strong>Layer 1：</strong><code>get_intent_classifier(session)</code> 返回 Aho-Corasick 比對器（lazy-load 單例）；掃描 <code>chinese_query</code> 中的分工關鍵字 → 返回「機關」+「單位」對</li>
-          <li><strong>Layer 2：</strong>Aho-Corasick 無命中時觸發 <code>llm_fallback_classify()</code>；將「單位對照表」全量列（編號清單格式）完整提供給 LLM，請其輸出 JSON 格式機關/單位；兩層均無結果時回傳 None</li>
+          <li><strong>Layer 1：</strong><code>get_intent_classifier(session)</code> 返回 Aho-Corasick 比對器（lazy-load 單例）；掃描 <code>chinese_query</code> 中的分工關鍵字（含 alias_mapping.json 別名）→ 返回「機關」+「單位」對</li>
+          <li><strong>Layer 2：</strong>Aho-Corasick 無命中時觸發 <code>llm_fallback_classify()</code>；<code>_all_unit_rows</code> 於 <code>load()</code> 時轉存，無需再次查詢 DB；兩層均無結果時回傳 None</li>
         </ul>
         <strong>1c — 特徵擴增</strong>
         <ul>
           <li><code>get_dictionary_matcher(session)</code> lazy-load（與 Phase 3 共用 singleton，零 DB round-trip）</li>
           <li><code>matcher.filter_by_text(chinese_query)</code> 命中術語，取前 5 筆附加至查詢</li>
-          <li>輸出 <code>enriched_query</code>，無命中時退化為 <code>chinese_query</code></li>
+          <li>輸出 <code>enriched_query</code>；無命中時退化為 <code>chinese_query</code></li>
         </ul>
       </div>
     </div>
@@ -300,9 +390,10 @@
         <br/><br/>
         <strong>Track A — 問卷庫</strong>（見「<a href="#retrieval">向量檢索</a>」章節）
         <ul>
-          <li>雙路徑向量搜尋 → UNION ALL → GROUP BY 聚合 → HAVING 距離閾值</li>
-          <li>CROSS JOIN 展開相鄰切塊（±1）→ JOIN 問卷題目檔 &amp; 問卷主檔</li>
-          <li>JOIN 問卷附件檔 取得附件路徑（全參數化）</li>
+          <li>單向量 cosine_distance → 聚合 → HAVING 距離閾值</li>
+          <li>CROSS JOIN 展開相鄰切塊（±1，限定同 chunk_source）→ JOIN 問卷題目檔 &amp; 問卷主檔</li>
+          <li>JOIN 問卷附件檔 取得附件路徑（全參數化 .in_()）</li>
+          <li>raw_context 組裝以問卷題目檔主鍵去重</li>
         </ul>
         <strong>Track B — 知識文獻庫</strong>
         <ul>
@@ -320,12 +411,12 @@
     <div class="arrow">↓</div>
 
     <div class="phase">
-      <div class="phase-label warn">Phase 3<br/>LLM<br/>生成</div>
+      <div class="phase-label purple">Phase 3<br/>LLM<br/>生成</div>
       <div class="phase-body">
         <strong>DictionaryMatcher 動態篩選</strong>（見「<a href="#dictionary">字典機制</a>」章節）
         <ul>
           <li>複用 Phase 1c 已載入的 singleton，零成本</li>
-          <li><code>matcher.filter_by_text(chinese_query, raw_context)</code> 掃描命中術語</li>
+          <li><code>matcher.filter_by_text_grounded(chinese_query, raw_context)</code> 掃描命中術語（防短詞誤觸）</li>
           <li><code>build_dictionary_xml(filtered_dict)</code> 組 <code>&lt;Mandatory_Dictionary&gt;</code> XML</li>
         </ul>
         <strong>LLM 呼叫</strong>
@@ -343,38 +434,40 @@
       <div class="phase-body">
         <ul>
           <li><code>s2t(中文回覆)</code> — OpenCC 確保正體中文</li>
-          <li>組裝 9 欄位 <code>AskResponse</code>：負責單位、原始題目、中文譯文、中文回覆、英文回覆、附件超連結、參考來源、<strong>知識參考來源</strong></li>
+          <li>組裝 9 欄位 <code>AskResponse</code>：負責單位、原始題目、中文譯文、中文回覆、英文回覆、附件超連結、參考來源、知識參考來源</li>
           <li>無問卷且無知識文獻命中時提前返回「無法作答」訊息</li>
+          <li>fire-and-forget <code>asyncio.create_task(save_query_log(...))</code> 記錄完整管線上下文</li>
         </ul>
       </div>
     </div>
   </div>
 </section>
 
-<!-- ═══ 4. 向量檢索 ═══════════════════════════════════════════════════════ -->
+<!-- ═══ 5. 向量檢索 ═══════════════════════════════════════════════════════ -->
 <section id="retrieval">
-  <h2>向量檢索 CTE 鏈</h2>
-  <p>所有查詢使用 SQLAlchemy Core 表達式，以 <code>.cte()</code> 鏈式組合，杜絕 Raw SQL 字串拼接。雙軌並行執行後在 Python 層全局合並。</p>
+  <h2>5. 向量檢索 CTE 鏈</h2>
+  <p>所有查詢使用 SQLAlchemy Core 表達式，以 <code>.cte()</code> 鏈式組合，杜絕 Raw SQL 字串拼接。雙軌並行執行後在 Python 層全局合並。向量距離呼叫統一透過 <code>cosine_distance_expr(col, vec)</code> 函式，支援 PostgreSQL 與 SQL Server 2025 兩種後端。</p>
 
-  <h3>Track A — 問卷庫（9 層 CTE）</h3>
+  <h3>Track A — 問卷庫（6 層 CTE + 主查詢）</h3>
+  <div class="alert alert-info">
+    <code>問卷題目切塊</code> 採用<strong>單向量欄位</strong>（<code>embedding vector(1024)</code>），以 <code>chunk_source</code>（<code>'question'</code> 或 <code>'answer'</code>）區分來源。相鄰切塊展開時限定同 chunk_source 範圍。
+  </div>
   <table>
     <tr><th>CTE 名稱</th><th>說明</th></tr>
-    <tr><td><code>title_hits</code></td><td>cosine_distance(題目向量)，取 top_k 筆，含 chunk_idx</td></tr>
-    <tr><td><code>reply_hits</code></td><td>cosine_distance(回覆向量)，取 top_k 筆</td></tr>
-    <tr><td><code>combined</code></td><td>UNION ALL 合併雙路徑結果</td></tr>
-    <tr><td><code>aggregated</code></td><td>GROUP BY 問卷題目檔主鍵 + chunk_idx，MIN(distance)，HAVING &lt;= threshold，LIMIT top_n</td></tr>
+    <tr><td><code>chunk_hits</code></td><td>cosine_distance_expr(embedding, query_vec)，取 top_k 筆（含 chunk_source、切塊索引）</td></tr>
+    <tr><td><code>aggregated</code></td><td>GROUP BY 問卷題目檔主鍵 + chunk_source + 切塊索引，MIN(distance)，HAVING &lt;= threshold，LIMIT top_n</td></tr>
     <tr><td><code>adj</code></td><td>VALUES(-1), (0), (1) — 相鄰偏移量</td></tr>
-    <tr><td><code>expanded</code></td><td>CROSS JOIN aggregated × adj，計算 target_idx</td></tr>
-    <tr><td><code>expanded_chunks</code></td><td>JOIN 問卷題目切塊 取切塊文字</td></tr>
-    <tr><td><code>final_data</code></td><td>JOIN 問卷題目檔（是否刪除=0）取題目序號</td></tr>
-    <tr><td>主查詢</td><td>JOIN 問卷主檔 取問卷名稱/輸出國家/輸出品項；.in_() JOIN 問卷附件檔</td></tr>
+    <tr><td><code>expanded</code></td><td>CROSS JOIN aggregated × adj，計算 neighbor_idx，攜帶 chunk_source</td></tr>
+    <tr><td><code>expanded_chunks</code></td><td>JOIN 問卷題目切塊，限定同 chunk_source 且 切塊索引 = neighbor_idx，取 chunk_text</td></tr>
+    <tr><td><code>final_data</code></td><td>JOIN 問卷題目檔（是否刪除=0）取題目、回覆原文與題目序號</td></tr>
+    <tr><td>主查詢</td><td>JOIN 問卷主檔 取問卷名稱/輸出國家/輸出品項；<code>.in_(master_pks)</code> JOIN 問卷附件檔取檔案路徑；Python 層以問卷題目檔主鍵去重組裝 raw_context</td></tr>
   </table>
 
   <h3>Track B — 知識文獻庫（6 層 CTE）</h3>
   <table>
     <tr><th>CTE 名稱</th><th>說明</th></tr>
-    <tr><td><code>knowledge_hits</code></td><td>cosine_distance(內容向量)，取 top_k 筆</td></tr>
-    <tr><td><code>knowledge_agg</code></td><td>GROUP BY 知識文獻節點檔主鍵 + chunk_idx，MIN(distance)，HAVING &lt;= threshold，LIMIT top_n</td></tr>
+    <tr><td><code>knowledge_hits</code></td><td>cosine_distance_expr(內容向量, query_vec)，取 top_k 筆</td></tr>
+    <tr><td><code>knowledge_agg</code></td><td>GROUP BY 知識文獻節點檔主鍵 + 切塊索引，MIN(distance)，HAVING &lt;= threshold，LIMIT top_n</td></tr>
     <tr><td><code>knowledge_adj</code></td><td>VALUES(-1), (0), (1)</td></tr>
     <tr><td><code>knowledge_expanded</code></td><td>CROSS JOIN knowledge_agg × knowledge_adj，計算 neighbor_idx</td></tr>
     <tr><td><code>knowledge_expanded_chunks</code></td><td>JOIN 知識文獻切塊檔 取切塊內容</td></tr>
@@ -382,17 +475,17 @@
   </table>
 
   <div class="alert alert-info">
-    <strong>距離閾值</strong>：使用 cosine distance（<code>&lt;=&gt;</code> 運算子），預設 <code>SIMILARITY_THRESHOLD=0.75</code>。
+    <strong>距離閾值：</strong>使用 cosine distance（<code>&lt;=&gt;</code> 運算子），預設 <code>SIMILARITY_THRESHOLD=0.75</code>。
     值越小代表越相似。可透過 API 參數 <code>similarity_threshold</code> 覆蓋。
   </div>
   <div class="alert alert-warn">
-    <strong>禁止</strong>：CTE 別名不可使用 PostgreSQL 保留字（<code>offset</code>、<code>limit</code>、<code>order</code>）。
+    <strong>CTE 別名禁用 PostgreSQL 保留字：</strong>不可使用 <code>offset</code>、<code>limit</code>、<code>order</code> 作為 CTE 別名。
   </div>
 </section>
 
-<!-- ═══ 4b. 檢索合併模式 ══════════════════════════════════════════════════ -->
+<!-- ═══ 6. 合併模式 ════════════════════════════════════════════════════════ -->
 <section id="merge-mode">
-  <h2>檢索合併模式（RETRIEVAL_MERGE_MODE）</h2>
+  <h2>6. 檢索合併模式（RETRIEVAL_MERGE_MODE）</h2>
   <p>
     Track A（問卷庫）與 Track B（知識文獻庫）完成各自 CTE 查詢後，
     Python 層依 <code>settings.retrieval_merge_mode</code> 環境變數決定如何合並兩軌結果。
@@ -419,14 +512,14 @@ tagged = tagged[:top_n]  <span class="cm"># 兩軌共用 top_n 配額</span></pr
   </div>
 
   <div class="alert alert-info">
-    <strong>設定方式</strong>：<code>.env</code> 中 <code>RETRIEVAL_MERGE_MODE=independent</code>（或 <code>compete</code>）。
+    <strong>設定方式：</strong><code>.env</code> 中 <code>RETRIEVAL_MERGE_MODE=independent</code>（或 <code>compete</code>）。
     <code>top_k</code> 不受此設定影響，始終由系統計算 <code>max(TOP_K, top_n+25)</code>，不暴露給使用者。
   </div>
 </section>
 
-<!-- ═══ 5. 字典機制 ════════════════════════════════════════════════════════ -->
+<!-- ═══ 7. 字典機制 ════════════════════════════════════════════════════════ -->
 <section id="dictionary">
-  <h2>DictionaryMatcher 字典機制</h2>
+  <h2>7. DictionaryMatcher 字典機制</h2>
   <p>
     「官方正規詞彙」資料表共 6000+ 筆中英對照術語。若全部注入 LLM Prompt，
     約 200K+ tokens，嚴重超過 context window。
@@ -450,30 +543,38 @@ tagged = tagged[:top_n]  <span class="cm"># 兩軌共用 top_n 配額</span></pr
     </div>
   </div>
 
+  <h3>短詞映射擴增</h3>
+  <p>
+    <code>_TERM_MAPPING_PATH</code> 從 <code>app/resources/term_mapping.json</code> 載入短詞映射（由 <code>tools/extract_stems.py</code> 離線產出），
+    讓 Aho-Corasick 能比對到「花生」這類縮略查詢，映射至「花生及其製品」等官方術語，提升覆蓋率。
+  </p>
+
   <h3>Singleton 模式</h3>
   <p>與 <code>intent.py</code> 的 <code>IntentClassifier</code> 相同設計：模組級 <code>_matcher</code> 單例，<code>get_dictionary_matcher(session)</code> 負責 lazy-load。</p>
   <pre><span class="cm"># utils/dictionary.py（簡化示意）</span>
 <span class="kw">class</span> <span class="fn">DictionaryMatcher</span>:
-    <span class="kw">async def</span> <span class="fn">load</span>(self, session):          <span class="cm"># 從 DB 載入全量詞彙，建構 automaton</span>
+    <span class="kw">async def</span> <span class="fn">load</span>(self, session):               <span class="cm"># 從 DB 載入全量詞彙，建構 automaton</span>
         ...
-    <span class="kw">def</span> <span class="fn">filter_by_text</span>(self, *texts) -> dict: <span class="cm"># O(n) 掃描，回傳命中子集</span>
+    <span class="kw">def</span> <span class="fn">filter_by_text</span>(self, *texts) -> dict:    <span class="cm"># Phase 1c：O(n) 掃描，回傳命中子集</span>
+        ...
+    <span class="kw">def</span> <span class="fn">filter_by_text_grounded</span>(self, q, ctx) -> dict:  <span class="cm"># Phase 3：防短詞誤觸</span>
         ...
 
-_matcher = <span class="fn">DictionaryMatcher</span>()            <span class="cm"># 模組級單例</span>
+_matcher = <span class="fn">DictionaryMatcher</span>()               <span class="cm"># 模組級單例</span>
 
-<span class="kw">async def</span> <span class="fn">get_dictionary_matcher</span>(session): <span class="cm"># lazy-load</span>
+<span class="kw">async def</span> <span class="fn">get_dictionary_matcher</span>(session):    <span class="cm"># lazy-load</span>
     <span class="kw">if not</span> _matcher._loaded:
         <span class="kw">await</span> _matcher.<span class="fn">load</span>(session)
     <span class="kw">return</span> _matcher</pre>
 </section>
 
-<!-- ═══ 6. API 端點 ════════════════════════════════════════════════════════ -->
+<!-- ═══ 8. API 端點 ════════════════════════════════════════════════════════ -->
 <section id="api">
-  <h2>API 端點</h2>
+  <h2>8. API 端點</h2>
   <table>
     <tr><th>Method</th><th>路徑</th><th>說明</th></tr>
     <tr>
-      <td><span class="badge badge-blue">POST</span><br/><span class="badge badge-green">GET</span></td>
+      <td><span class="badge badge-blue">POST</span>&nbsp;<span class="badge badge-green">GET</span></td>
       <td><code>/api/v1/qa/ask</code></td>
       <td>單題問答。Body（POST）含 <code>question</code>、<code>similarity_threshold</code>、<code>top_n</code></td>
     </tr>
@@ -497,7 +598,7 @@ _matcher = <span class="fn">DictionaryMatcher</span>()            <span class="c
   <h3>AskResponse 欄位</h3>
   <table>
     <tr><th>欄位</th><th>型別</th><th>說明</th></tr>
-    <tr><td><code>負責單位</code></td><td>dict</td><td><code>{"機關": "...", "單位": "..."}</code>，無比對時為空字串</td></tr>
+    <tr><td><code>負責單位</code></td><td>list[dict]</td><td><code>{"機關": "...", "單位": "..."}</code>，無比對時為空列表</td></tr>
     <tr><td><code>原始題目</code></td><td>string</td><td>使用者輸入原文</td></tr>
     <tr><td><code>中文譯文</code></td><td>string</td><td>若原文為中文則為空字串</td></tr>
     <tr><td><code>中文回覆</code></td><td>string</td><td>LLM 繁體中文回覆（OpenCC s2t 後處理）</td></tr>
@@ -508,11 +609,11 @@ _matcher = <span class="fn">DictionaryMatcher</span>()            <span class="c
   </table>
 </section>
 
-<!-- ═══ 7. 資料庫 ══════════════════════════════════════════════════════════ -->
+<!-- ═══ 9. 資料庫 ══════════════════════════════════════════════════════════ -->
 <section id="db">
-  <h2>資料庫 Schema</h2>
+  <h2>9. 資料庫 Schema</h2>
   <div class="alert alert-warn">
-    ⚠️ 禁止新增、修改或刪除任何現有欄位。所有查詢以 SQLAlchemy Core 表達式操作。
+    <strong>禁止</strong>新增、修改或刪除任何現有欄位。所有查詢以 SQLAlchemy Core 表達式操作。
   </div>
   <table>
     <tr><th>資料表</th><th>主要欄位</th><th>用途</th></tr>
@@ -528,8 +629,8 @@ _matcher = <span class="fn">DictionaryMatcher</span>()            <span class="c
     </tr>
     <tr>
       <td><code>問卷題目切塊</code></td>
-      <td>主鍵(uuid)、問卷題目檔主鍵、題目向量 vector(1024)、回覆向量 vector(1024)、切塊索引</td>
-      <td>向量化切塊，供 pgvector 搜尋</td>
+      <td>主鍵(uuid)、問卷題目檔主鍵、<strong>chunk_source</strong>（'question'|'answer'）、chunk_text、<strong>embedding</strong> vector(1024)、切塊索引</td>
+      <td>單向量切塊，chunk_source 區分題目/回覆，供 pgvector 搜尋</td>
     </tr>
     <tr>
       <td><code>問卷附件檔</code></td>
@@ -543,7 +644,7 @@ _matcher = <span class="fn">DictionaryMatcher</span>()            <span class="c
     </tr>
     <tr>
       <td><code>單位對照表</code></td>
-      <td>機關、單位、分工關鍵字</td>
+      <td>機關、單位、分工關鍵字、擴充關鍵字（TEXT[]）</td>
       <td>Layer 1 Aho-Corasick 意圖分類；Layer 2 LLM 兜底全量列</td>
     </tr>
     <tr>
@@ -566,12 +667,17 @@ _matcher = <span class="fn">DictionaryMatcher</span>()            <span class="c
       <td>主鍵(uuid)、知識文獻節點檔主鍵、切塊內容、內容向量 vector(1024)、切塊索引</td>
       <td>知識文獻向量切塊（由 tools/ingest_agent.py 離線管理）</td>
     </tr>
+    <tr>
+      <td><code>查詢紀錄</code></td>
+      <td>主鍵(uuid)、查詢時間、原始問題、是否中文、意圖分類方式、負責機關/單位、命中術語(jsonb)、enriched_query、raw_context、knowledge_context、dictionary_xml、llm_prompt、llm_output、英文回覆、中文回覆、耗時毫秒、錯誤訊息</td>
+      <td>問答管線完整上下文紀錄，供追溯分析（fire-and-forget INSERT）</td>
+    </tr>
   </table>
 </section>
 
-<!-- ═══ 8. 模組說明 ════════════════════════════════════════════════════════ -->
+<!-- ═══ 10. 模組說明 ════════════════════════════════════════════════════════ -->
 <section id="modules">
-  <h2>模組責任說明</h2>
+  <h2>10. 模組責任說明</h2>
   <div class="grid-2">
     <div class="card">
       <h4>app/services/embedding.py</h4>
@@ -585,21 +691,21 @@ _matcher = <span class="fn">DictionaryMatcher</span>()            <span class="c
       <h4>app/services/intent.py</h4>
       <p><code>IntentClassifier</code>：雙層意圖分類器。</p>
       <ul>
-        <li><strong>Layer 1：</strong>Aho-Corasick 比對「單位對照表」分工關鍵字（含 alias_mapping.json 別名），返回 <code>IntentResult</code>（機關 + 單位）</li>
-        <li><strong>Layer 2：</strong><code>llm_fallback_classify()</code> 僅在 Aho-Corasick 無命中時觸發；<code>_all_unit_rows</code> 於 <code>load()</code> 時轉存，無需再次查詢 DB；將全量列提供給 LLM，判斷無關聯時回傳 None</li>
+        <li><strong>Layer 1：</strong>Aho-Corasick 比對分工關鍵字（含 <code>alias_mapping.json</code> 別名 + <code>擴充關鍵字</code> 欄位）</li>
+        <li><strong>Layer 2：</strong><code>llm_fallback_classify()</code>；<code>_all_unit_rows</code> 於 <code>load()</code> 時轉存，無需再次查詢 DB；CoT 思維鏈 → XML 封裝 JSON 列表輸出</li>
       </ul>
-      <p>模組級單例 lazy-load。</p>
     </div>
     <div class="card">
       <h4>app/services/retrieval.py</h4>
       <p><code>hybrid_retrieve(query, session, threshold, top_n)</code>：<br/>
-      <strong>Track A</strong>：9 層 CTE 鏈式問卷庫向量查詢。<br/>
-      <strong>Track B</strong>：6 層 CTE 知識文獻庫向量查詢，依 REGULATION/GUIDELINE/QA 類型格式化 XML 區塊。<br/>
-      回傳 <code>RetrievalResult</code>（chunks、references、attachment_urls、raw_context、<strong>knowledge_context</strong>、<strong>knowledge_references</strong>）</p>
+      <strong>Track A</strong>：6 層 CTE 鏈式問卷庫單向量查詢（chunk_source 區分）。<br/>
+      <strong>Track B</strong>：6 層 CTE 知識文獻庫向量查詢，依 REGULATION/GUIDELINE/QA 格式化 XML。<br/>
+      向量距離統一呼叫 <code>cosine_distance_expr()</code>（雙後端相容）。<br/>
+      回傳 <code>RetrievalResult</code>（chunks、references、attachment_urls、raw_context、knowledge_context、knowledge_references）</p>
     </div>
     <div class="card">
       <h4>app/services/ingest.py</h4>
-      <p><code>ingest_questionnaire(pk, session)</code>：讀取問卷題目檔 → 滑動視窗切塊 → tiktoken 計數 → DELETE 舊切塊 → Batch Embed → INSERT 向量。</p>
+      <p><code>ingest_questionnaire(pk, session)</code>：讀取問卷題目檔 → 滑動視窗切塊 → tiktoken 計數 → DELETE 舊切塊 → Batch Embed → INSERT 向量。切塊寫入時同時設定 <code>chunk_source</code>（'question' 或 'answer'）。</p>
     </div>
     <div class="card">
       <h4>app/services/translate.py</h4>
@@ -611,29 +717,44 @@ _matcher = <span class="fn">DictionaryMatcher</span>()            <span class="c
       <code>extract_questions(markdown)</code>（async）：滑動視窗切塊 + Semaphore 限速並行 LLM 呼叫，萃取英文題號。</p>
     </div>
     <div class="card">
+      <h4>app/services/query_log.py</h4>
+      <p><code>save_query_log(log_data)</code>：fire-and-forget INSERT 至 <code>查詢紀錄</code> 資料表。</p>
+      <ul>
+        <li>使用<strong>獨立 session</strong>（非 request-scoped Depends session），確保 HTTP response 返回後仍能成功寫入</li>
+        <li>所有例外均被捕捉並 log，絕不影響主管線</li>
+        <li>文字欄位寫入前均經 <code>sanitize_text_for_db()</code></li>
+      </ul>
+    </div>
+    <div class="card">
       <h4>app/utils/dictionary.py</h4>
       <p><code>DictionaryMatcher</code>（Aho-Corasick）<br/>
       <code>get_dictionary_matcher(session)</code> → lazy-load 單例<br/>
-      <code>filter_by_text(*texts)</code> → <code>dict[str, str]</code>（Phase 1c 特徵擴增）<br/>
-      <code>filter_by_text_grounded(query, context)</code> → <code>dict[str, str]</code>（Phase 3，防短詞誤觸）<br/>
+      <code>filter_by_text(*texts)</code> → Phase 1c 特徵擴增<br/>
+      <code>filter_by_text_grounded(query, context)</code> → Phase 3 防短詞誤觸<br/>
       <code>build_dictionary_xml(items)</code> → XML 字串<br/>
-      <code>load_dictionary(session)</code> → 全量載入（供 tools/ 使用）<br/>
-      <span style="color:var(--muted);font-size:0.88em">由 <code>_TERM_MAPPING_PATH</code> 從 <code>app/resources/term_mapping.json</code> 載入短詞映射（tools/extract_stems.py 離線產出）</span></p>
+      <code>load_dictionary(session)</code> → 全量載入（tools/ 使用）</p>
     </div>
     <div class="card">
       <h4>app/utils/connection_manager.py</h4>
       <p><code>monitor_disconnect(request)</code>：背景監聽 ASGI 的 <code>http.disconnect</code>，於客戶端斷線時發送訊號。<br/>
-      <code>run_interruptible(coro, signal)</code>：封裝長耗時非同步任務（如向量檢索、LLM 呼叫），於斷線時立刻拋出 <code>asyncio.CancelledError</code> 以中斷 API 管線並釋放連線資源。</p>
+      <code>run_interruptible(coro, signal)</code>：封裝長耗時非同步任務，於斷線時立刻拋出 <code>asyncio.CancelledError</code>，中介軟體攔截後回傳 HTTP 499。</p>
+    </div>
+    <div class="card">
+      <h4>app/db_dialect.py</h4>
+      <p>資料庫方言抽象層，詳見「<a href="#dual-backend">雙後端支援</a>」章節。<br/>
+      <code>MssqlVector(dim)</code>：SQL Server 2025 VECTOR(N) 型別。<br/>
+      <code>MssqlArrayString()</code>：NVARCHAR(MAX) 儲存 JSON 陣列。<br/>
+      <code>cosine_distance_expr(column, vector, dim)</code>：後端感知距離函式。</p>
     </div>
   </div>
 </section>
 
-<!-- ═══ 9. 離線工具 ════════════════════════════════════════════════════════ -->
+<!-- ═══ 11. 離線工具 ════════════════════════════════════════════════════════ -->
 <section id="tools">
-  <h2>離線工具（tools/）</h2>
+  <h2>11. 離線工具（tools/）</h2>
   <p>
     <code>tools/</code> 目錄包含獨立 CLI 腳本，與主 FastAPI 應用<strong>完全無相依</strong>。
-    使用同步 <code>psycopg</code>（非 async）與 <code>openai.OpenAI</code>（非 AsyncClient）。
+    使用同步 <code>psycopg</code> 或 <code>pyodbc</code>（由 <code>tools/db_utils.py</code> 統一管理）與 <code>openai.OpenAI</code>（非 AsyncClient）。
   </p>
 
   <div class="alert alert-green">
@@ -648,7 +769,7 @@ _matcher = <span class="fn">DictionaryMatcher</span>()            <span class="c
       <div class="phase-body">
         <code>markdown_converter.py</code> — markitdown 同步封裝，支援 PDF/DOC/XLSX 等格式 → Markdown
         <div class="alert alert-warn" style="margin-top:10px">
-          <strong>降級 A</strong>：markitdown 結果 &lt; 50 字元（<code>MARKITDOWN_MIN_LENGTH</code>）且副檔名為 <code>.pdf</code>
+          <strong>降級 A：</strong>markitdown 結果 &lt; 50 字元（<code>MARKITDOWN_MIN_LENGTH</code>）且副檔名為 <code>.pdf</code>
           → 改用 doc-to-json API（<code>pdf_reader.py</code>）取文字；非 PDF 直接終止。
         </div>
       </div>
@@ -660,11 +781,11 @@ _matcher = <span class="fn">DictionaryMatcher</span>()            <span class="c
     </div>
     <div class="arrow">↓</div>
     <div class="phase">
-      <div class="phase-label warn">LLM 結構化</div>
+      <div class="phase-label purple">LLM 結構化</div>
       <div class="phase-body">
         每個 macro_chunk → Gemma-4 → JSON nodes（節點標題路徑 + 節點內容 + 文獻類型 REGULATION/GUIDELINE/QA）
         <div class="alert alert-warn" style="margin-top:10px">
-          <strong>降級 B</strong>：所有 macro_chunk LLM 均萃取 0 節點，且降級 A 未觸發（<code>used_doc2json=False</code>），且為 PDF
+          <strong>降級 B：</strong>所有 macro_chunk LLM 均萃取 0 節點，且降級 A 未觸發（<code>used_doc2json=False</code>），且為 PDF
           → 改用 doc-to-json 重新取文字後再次 LLM 結構化。二次仍 0 節點則終止。
         </div>
       </div>
@@ -678,6 +799,25 @@ _matcher = <span class="fn">DictionaryMatcher</span>()            <span class="c
       </div>
     </div>
   </div>
+  <div class="grid-2" style="margin-top:16px">
+    <div class="card">
+      <h4>CLI 選項</h4>
+      <pre>python tools/ingest_agent.py \
+  --input ./文件.pdf \
+  --doc-name "食品輸出規範" \
+  [--doc-type REGULATION] \
+  [--is-markdown] [--verbose]</pre>
+    </div>
+    <div class="card">
+      <h4>支援的 doc_type</h4>
+      <table>
+        <tr><th>值</th><th>說明</th></tr>
+        <tr><td><code>REGULATION</code></td><td>法規條文</td></tr>
+        <tr><td><code>GUIDELINE</code></td><td>操作指引</td></tr>
+        <tr><td><code>QA</code></td><td>問答彙編</td></tr>
+      </table>
+    </div>
+  </div>
 
   <h3>工具二：批次法規匯入（batch_ingest_regulations.py）</h3>
   <p>掃描 <code>法規/REGULATION/</code>、<code>法規/GUIDELINE/</code>、<code>法規/QA/</code> 三個子資料夾，
@@ -687,21 +827,20 @@ _matcher = <span class="fn">DictionaryMatcher</span>()            <span class="c
     <div class="card">
       <h4>資料夾結構</h4>
       <pre>法規/
-├── REGULATION/   ← doc_type=REGULATION
-├── GUIDELINE/    ← doc_type=GUIDELINE
-└── QA/           ← doc_type=QA</pre>
+├── REGULATION/   <span class="cm">← doc_type=REGULATION</span>
+├── GUIDELINE/    <span class="cm">← doc_type=GUIDELINE</span>
+└── QA/           <span class="cm">← doc_type=QA</span></pre>
     </div>
     <div class="card">
       <h4>CLI 用法</h4>
       <pre>python tools/batch_ingest_regulations.py \
   [--folder ./法規] \
-  [--dry-run] \
-  [--verbose]</pre>
+  [--dry-run] [--verbose]</pre>
       <p style="margin-top:8px">任一檔案失敗 → exit code 1；結束時輸出成功/失敗統計。</p>
     </div>
   </div>
   <div class="alert alert-info">
-    <strong>--dry-run</strong>：列出所有待匯入檔案（含自動推斷的 doc_type），不執行實際匯入，可用於預覽批次範圍。
+    <strong>--dry-run：</strong>列出所有待匯入檔案（含自動推斷的 doc_type），不執行實際匯入，可用於預覽批次範圍。
   </div>
 
   <h3>工具三：從 PDF 配對擷取術語（extract_terms.py）</h3>
@@ -714,7 +853,7 @@ _matcher = <span class="fn">DictionaryMatcher</span>()            <span class="c
         <tr><td><code>--output</code></td><td><code>terms_output.csv</code></td><td>輸出 CSV 路徑</td></tr>
         <tr><td><code>--workers N</code></td><td><code>1</code></td><td>並行處理 PDF 配對數（I/O bound，建議 2–4）</td></tr>
         <tr><td><code>--no-structured</code></td><td>停用</td><td>關閉結構化解析，改用平文字 OCR（適用圖片型 PDF）</td></tr>
-        <tr><td><code>--chunk-size</code></td><td><code>2000</code></td><td>降級字元切塊大小（結構化模式不影響）</td></tr>
+        <tr><td><code>--chunk-size</code></td><td><code>2000</code></td><td>降級字元切塊大小</td></tr>
         <tr><td><code>--overlap</code></td><td><code>300</code></td><td>降級切塊重疊字元數</td></tr>
       </table>
     </div>
@@ -741,11 +880,11 @@ _matcher = <span class="fn">DictionaryMatcher</span>()            <span class="c
     <div class="phase">
       <div class="phase-label green">PDF 讀取</div>
       <div class="phase-body">
-        <code>pdf_reader.py</code> — POST multipart/form-data 至 doc-to-json API（<code>enable_doc_layout_analysis=True</code>）<br/>
-        <strong>結構化模式（預設）</strong>：<code>read_pdf_structured()</code> 回傳 <code>list[Block]</code>，每個 Block 含 <code>type</code>（plain text / title / table / table_footnote）、<code>text</code>、<code>page</code>、<code>order</code><br/>
-        <strong><code>--no-structured</code> 模式</strong>：<code>read_pdf()</code> 直接取平文字字串（適用掃描/圖片型 PDF）
+        <code>pdf_reader.py</code> — POST multipart/form-data 至 doc-to-json API<br/>
+        <strong>結構化模式（預設）</strong>：<code>read_pdf_structured()</code> 回傳 <code>list[Block]</code>（type / text / page / order）<br/>
+        <strong><code>--no-structured</code> 模式</strong>：<code>read_pdf()</code> 直接取平文字字串
         <div class="alert alert-info" style="margin-top:10px">
-          降級觸發條件：中文或英文區塊數 &lt; 5 時，即使未指定 <code>--no-structured</code> 也自動切換為字元切塊路徑。
+          降級觸發條件：中文或英文區塊數 &lt; 5 時自動切換為字元切塊路徑。
         </div>
       </div>
     </div>
@@ -753,24 +892,17 @@ _matcher = <span class="fn">DictionaryMatcher</span>()            <span class="c
     <div class="phase">
       <div class="phase-label warn">切塊</div>
       <div class="phase-body">
-        <strong>結構化切塊（<code>chunk_by_structure()</code>）</strong>：<code>chunking.py</code><br/>
-        <ul>
-          <li>以 <code>title</code> 區塊作為語意單元邊界；累積 token &gt; max_tokens/2 時先輸出</li>
-          <li><code>table</code>/<code>table_footnote</code> 獨立輸出，不與 plain text 合併</li>
-          <li>Token 計數：優先使用 <code>tiktoken cl100k_base</code>；未安裝時以 <code>len(text)//2</code> 估算</li>
-          <li>預設 max_tokens=1200（留 800 tokens 作 LLM 輸出緩衝）</li>
-        </ul>
+        <strong>結構化切塊（<code>chunk_by_structure()</code>）</strong>：以 <code>title</code> 區塊為語意邊界；<code>table</code>/<code>table_footnote</code> 獨立輸出；Token 計數優先 tiktoken cl100k_base，預設 max_tokens=1200<br/>
         <strong>字元切塊（降級，<code>chunk_text()</code>）</strong>：滑動視窗切分 + 比例索引對齊
       </div>
     </div>
     <div class="arrow">↓</div>
     <div class="phase">
-      <div class="phase-label">LLM 擷取</div>
+      <div class="phase-label purple">LLM 擷取</div>
       <div class="phase-body">
         <code>llm_client.py</code> <code>extract_terms_from_chunk(zh_chunk, en_chunk)</code><br/>
         Gemma 4 返回 <code>[{"chinese_term": "...", "english_term": "...", "responsible_unit": "..."}]</code> JSON 陣列<br/>
-        透過 <code>ThreadPoolExecutor(max_workers=N)</code> 並行處理多組 PDF 配對，完成時即時輸出進度
-        <code>[進度 X/N] 完成：&lt;檔名&gt; → 驗證通過 M 筆  (成功 S / 失敗 F / 剩餘 R)</code>
+        透過 <code>ThreadPoolExecutor(max_workers=N)</code> 並行處理多組 PDF 配對
       </div>
     </div>
     <div class="arrow">↓</div>
@@ -778,13 +910,8 @@ _matcher = <span class="fn">DictionaryMatcher</span>()            <span class="c
       <div class="phase-label green">驗證 &amp; 匯出</div>
       <div class="phase-body">
         <code>validator.py</code> — 反向驗證（子字串比對防幻覺）<br/>
-        <code>aggregator.py</code> — 頻率聚合去重<br/>
-        <ul>
-          <li>英文字詞去重前統一轉小寫（避免大小寫差異產生重複筆數）</li>
-          <li>每筆術語攜帶 <code>source_file</code>（PDF 共同前綴，不含語言後綴與副檔名）</li>
-          <li>同一術語對來自多個 PDF 時，<code>來源檔案</code> 欄位以 <code>, </code> 分隔</li>
-        </ul>
-        CSV 欄位順序：<strong>中文字詞、英文字詞、出現頻率、負責單位、來源檔案</strong>
+        <code>aggregator.py</code> — 頻率聚合去重（英文統一轉小寫；來源檔案 <code>, </code> 分隔）<br/>
+        CSV 欄位順序：中文字詞、英文字詞、出現頻率、負責單位、來源檔案
       </div>
     </div>
   </div>
@@ -794,12 +921,12 @@ _matcher = <span class="fn">DictionaryMatcher</span>()            <span class="c
     <div class="phase">
       <div class="phase-label">讀取 DB</div>
       <div class="phase-body">
-        同步 <code>psycopg</code>：<code>SELECT "題目","回覆" FROM "問卷題目檔" WHERE "是否刪除" = 0</code>
+        同步連線（<code>db_utils.get_connection()</code>）：<code>SELECT "題目","回覆" FROM "問卷題目檔" WHERE "是否刪除" = 0</code>
       </div>
     </div>
     <div class="arrow">↓</div>
     <div class="phase">
-      <div class="phase-label warn">LLM 擷取</div>
+      <div class="phase-label purple">LLM 擷取</div>
       <div class="phase-body">
         <code>extract_terms_from_html(html_content)</code>：原始 HTML 直接送 LLM<br/>
         System Prompt 說明格式為「含 &lt;br&gt;/&lt;p&gt; 分隔的中英雙語 HTML」
@@ -813,30 +940,28 @@ _matcher = <span class="fn">DictionaryMatcher</span>()            <span class="c
       </div>
     </div>
   </div>
-</section>
+
   <h3>工具五：短詞映射萃取（extract_stems.py）</h3>
-  <p>離線酢選工具：從 DB 「官方正規詞彙」找出每個官方術語的核心短詞，產出 <code>app/resources/term_mapping.json</code>，供 <code>DictionaryMatcher</code> 線上載入以擴大 Aho-Corasick 比對覆蓋率。</p>
+  <p>離線酢選工具：從 DB「官方正規詞彙」找出每個官方術語的核心短詞，產出 <code>app/resources/term_mapping.json</code>，供 <code>DictionaryMatcher</code> 線上載入以擴大 Aho-Corasick 比對覆蓋率。</p>
   <div class="pipeline">
     <div class="phase">
       <div class="phase-label">DB 讀取</div>
-      <div class="phase-body">
-        同步 <code>psycopg</code>：<code>SELECT "中文字詞" FROM "官方正規詞彙"</code>
-      </div>
+      <div class="phase-body">同步連線：<code>SELECT "中文字詞" FROM "官方正規詞彙"</code></div>
     </div>
     <div class="arrow">↓</div>
     <div class="phase">
-      <div class="phase-label warn">考剥後綴 + LLM</div>
+      <div class="phase-label warn">剝後綴 + LLM</div>
       <div class="phase-body">
-        <strong>Stage 1</strong>：規則式剝除修飾語（<code>_TRIM_SUFFIX</code> regex）——可直接游山确認的短詞<br/>
-        <strong>Stage 2</strong>：剩餘詞彙分批送 Gemma-4 LLM 考徧語義萃取核心詞干
+        <strong>Stage 1</strong>：規則式剝除修飾語（<code>_TRIM_SUFFIX</code> regex）<br/>
+        <strong>Stage 2</strong>：剩餘詞彙分批送 Gemma-4 LLM 語義萃取核心詞干
       </div>
     </div>
     <div class="arrow">↓</div>
     <div class="phase">
       <div class="phase-label green">驗證 &amp; 輸出</div>
       <div class="phase-body">
-        子字串驗證（短詞必須存在於原始詞彙中）、長度 &ge; 2、STOPWORDS 過濾、MAX_AMBIGUITY=5（一個短詞對應至多 5 個官方術語）<br/>
-        輸出：<code>app/resources/term_mapping.json</code>，目錄自動建立
+        子字串驗證、長度 &ge; 2、STOPWORDS 過濾、MAX_AMBIGUITY=5<br/>
+        輸出：<code>app/resources/term_mapping.json</code>
       </div>
     </div>
   </div>
@@ -851,26 +976,24 @@ _matcher = <span class="fn">DictionaryMatcher</span>()            <span class="c
     <div class="card">
       <h4>輸出格式</h4>
       <pre>{
-  "花生": "花生及其製品",
-  "芹果": "芹果及其製品",
-  "HACCP 認證": "HACCP 認證制度",
+  <span class="st">"花生"</span>: <span class="fn">"花生及其製品"</span>,
+  <span class="st">"芹果"</span>: <span class="fn">"芹果及其製品"</span>,
+  <span class="st">"HACCP 認證"</span>: <span class="fn">"HACCP 認證制度"</span>,
   ...
 }</pre>
     </div>
   </div>
 
   <h3>工具六：機關別名萃取（extract_aliases.py）</h3>
-  <p>離線酢選工具：從 DB 「單位對照表」讀取每個機關 / 單位的分工關鍵字，透過 Gemma-4 產出口語別名、舊名稱、英文縮寫等，產出 <code>app/resources/alias_mapping.json</code>，供 <code>IntentClassifier</code> 動態載入取代硬編碼 <code>ALIAS_MAPPING</code>。</p>
+  <p>離線酢選工具：從 DB「單位對照表」讀取每個機關 / 單位的分工關鍵字，透過 Gemma-4 產出口語別名、舊名稱、英文縮寫等，產出 <code>app/resources/alias_mapping.json</code>，供 <code>IntentClassifier</code> 動態載入。</p>
   <div class="pipeline">
     <div class="phase">
       <div class="phase-label">DB 讀取</div>
-      <div class="phase-body">
-        同步 <code>psycopg</code>：<code>SELECT "機關","單位","分工關鍵字" FROM "單位對照表"</code>
-      </div>
+      <div class="phase-body">同步連線：<code>SELECT "機關","單位","分工關鍵字" FROM "單位對照表"</code></div>
     </div>
     <div class="arrow">↓</div>
     <div class="phase">
-      <div class="phase-label warn">LLM 別名萃取</div>
+      <div class="phase-label purple">LLM 別名萃取</div>
       <div class="phase-body">
         分批（預設 10 筆/批）送 Gemma-4，產出 <code>[{"standard_kw": "...", "aliases": [...]}]</code> JSON 陣列
       </div>
@@ -880,7 +1003,7 @@ _matcher = <span class="fn">DictionaryMatcher</span>()            <span class="c
       <div class="phase-label green">驗證 &amp; 輸出</div>
       <div class="phase-body">
         長度 &ge; 2、不與現有分工關鍵字重複、ALIAS_STOPWORDS 過濾（「主管機關」等泛語）<br/>
-        輸出：<code>app/resources/alias_mapping.json</code>，目錄自動建立
+        輸出：<code>app/resources/alias_mapping.json</code>
       </div>
     </div>
   </div>
@@ -895,93 +1018,216 @@ _matcher = <span class="fn">DictionaryMatcher</span>()            <span class="c
     <div class="card">
       <h4>輸出格式</h4>
       <pre>{
-  "關務署": ["海關", "關稅局", "通關"],
-  "防檢署": ["防檢局", "BAPHIQ"],
-  "食品藥物管理署": ["食藥署", "TFDA"],
+  <span class="st">"關務署"</span>: [<span class="fn">"海關"</span>, <span class="fn">"關稅局"</span>, <span class="fn">"通關"</span>],
+  <span class="st">"防檢署"</span>: [<span class="fn">"防檢局"</span>, <span class="fn">"BAPHIQ"</span>],
+  <span class="st">"食品藥物管理署"</span>: [<span class="fn">"食藥署"</span>, <span class="fn">"TFDA"</span>],
   ...
 }</pre>
     </div>
   </div>
   <div class="alert alert-info">
-    <strong>動態載入機制</strong>:
+    <strong>動態載入機制：</strong>
     <code>intent.py</code> 在 <code>load()</code> 時自動從 <code>app/resources/alias_mapping.json</code> 讀取別名資料，文件不存在時靜默略過。執行 <code>extract_aliases.py</code> 後重啟服務即生效。
   </div>
 </section>
-<!-- ═══ 10. 開發規範 ═══════════════════════════════════════════════════════ -->
-<section id="conventions">
-  <h2>開發規範</h2>
 
-  <h3>✅ 必須遵守</h3>
+<!-- ═══ 12. 雙後端支援 ═══════════════════════════════════════════════════ -->
+<section id="dual-backend">
+  <h2>12. 雙後端支援（PostgreSQL / SQL Server 2025）</h2>
+  <p>
+    透過 <code>DB_TYPE=postgres</code>（預設）或 <code>DB_TYPE=mssql</code> 環境變數切換資料庫後端，
+    同一份應用程式碼同時支援 PostgreSQL + pgvector 與 SQL Server 2025 原生 VECTOR 型別。
+    所有方言差異集中在 <code>app/db_dialect.py</code> 與 <code>tools/db_utils.py</code> 兩個抽象層，
+    業務邏輯層不感知後端差異。
+  </p>
+
+  <h3>關鍵差異對照</h3>
+  <table>
+    <tr><th>面向</th><th>PostgreSQL</th><th>SQL Server 2025</th></tr>
+    <tr><td>向量欄位型別</td><td><code>vector(1024)</code>（pgvector）</td><td><code>VECTOR(1024)</code>（原生）</td></tr>
+    <tr><td>向量相似度</td><td><code>col &lt;=&gt; vec</code>（<code>.cosine_distance()</code>）</td><td><code>VECTOR_DISTANCE('cosine', col, CAST(json AS VECTOR(1024)))</code></td></tr>
+    <tr><td>UUID 主鍵</td><td><code>gen_random_uuid()</code> / <code>UUID</code></td><td><code>NEWID()</code> / <code>UNIQUEIDENTIFIER</code></td></tr>
+    <tr><td>布林</td><td><code>BOOLEAN</code></td><td><code>BIT</code></td></tr>
+    <tr><td>JSON</td><td><code>JSONB</code></td><td><code>NVARCHAR(MAX)</code>（存 JSON 字串）</td></tr>
+    <tr><td>陣列</td><td><code>TEXT[]</code></td><td><code>NVARCHAR(MAX)</code>（存 JSON 字串）</td></tr>
+    <tr><td>SQL 占位符</td><td><code>%s</code>（psycopg）</td><td><code>?</code>（pyodbc）</td></tr>
+    <tr><td>非同步驅動</td><td><code>psycopg[binary]&gt;=3.1</code></td><td><code>aioodbc</code></td></tr>
+    <tr><td>DSN 格式</td><td><code>postgresql+psycopg://...</code></td><td><code>mssql+aioodbc://...?driver=...</code></td></tr>
+  </table>
+
+  <h3>app/db_dialect.py 核心 API</h3>
+  <div class="grid-2">
+    <div class="card">
+      <h4>MssqlVector / MssqlArrayString</h4>
+      <pre><span class="cm"># SQLAlchemy Column 定義（models.py）</span>
+Column(<span class="st">"embedding"</span>,
+    Vector(<span class="fn">1024</span>).<span class="fn">with_variant</span>(
+        MssqlVector(<span class="fn">1024</span>), <span class="st">"mssql"</span>)
+)
+Column(<span class="st">"擴充關鍵字"</span>,
+    ARRAY(String).<span class="fn">with_variant</span>(
+        MssqlArrayString(), <span class="st">"mssql"</span>)
+)</pre>
+    </div>
+    <div class="card">
+      <h4>cosine_distance_expr()</h4>
+      <pre><span class="cm"># 呼叫端（retrieval.py）</span>
+dist = <span class="fn">cosine_distance_expr</span>(
+    col_embedding, query_vec
+)
+
+<span class="cm"># 內部依 db_type 選擇實作</span>
+<span class="kw">if</span> db_type == <span class="st">"mssql"</span>:
+    <span class="cm"># VECTOR_DISTANCE('cosine', ...)</span>
+<span class="kw">else</span>:
+    <span class="cm"># col.cosine_distance(vector)</span></pre>
+    </div>
+  </div>
+
+  <h3>tools/db_utils.py 核心 API</h3>
+  <pre><span class="kw">PLACEHOLDER</span>: <span class="fn">str</span>           <span class="cm"># "?" (mssql) or "%s" (postgres)</span>
+
+<span class="kw">def</span> <span class="fn">get_connection</span>() -> ContextManager:
+    <span class="cm"># yields psycopg.Connection or pyodbc.Connection</span>
+    <span class="cm"># commits on exit, rollback on exception</span>
+
+<span class="kw">def</span> <span class="fn">get_schema</span>() -> <span class="fn">str</span>:
+    <span class="cm"># os.environ.get("DB_SCHEMA", "dbo" if mssql else "public")</span>
+
+<span class="kw">def</span> <span class="fn">encode_array</span>(value: list) -> <span class="fn">str | list</span>:
+    <span class="cm"># mssql → json.dumps(value)</span>
+    <span class="cm"># postgres → value (psycopg handles list natively)</span></pre>
+
+  <div class="alert alert-info">
+    <strong>tools/ 注意：</strong>向量 INSERT SQL 在函式進入時依 <code>DB_TYPE</code> env var 動態決定完整 SQL 字串（PostgreSQL 為 <code>%s::vector</code> cast，SQL Server 為 <code>CAST(? AS VECTOR(1024))</code>），此為唯一需要條件式 SQL 建構的地方。
+  </div>
+</section>
+
+<!-- ═══ 13. 開發規範 ═══════════════════════════════════════════════════════ -->
+<section id="conventions">
+  <h2>13. 開發規範</h2>
+
+  <h3>必須遵守</h3>
   <table>
     <tr><th>規範</th><th>說明</th></tr>
     <tr><td>SQLAlchemy Core only</td><td>所有 DB 查詢使用 <code>select()</code>/<code>insert()</code>/<code>delete()</code>/<code>update()</code>，複雜查詢以 <code>.cte()</code> 組合</td></tr>
     <tr><td>AsyncSession</td><td>所有 DB 操作透過 <code>get_db_session()</code> 依賴注入的 <code>AsyncSession</code></td></tr>
-    <tr><td>全參數化</td><td>條件篩選使用 <code>.in_(list)</code> 等方法自動綁定參數</td></tr>
+    <tr><td>全參數化</td><td>條件篩選使用 <code>.in_(list)</code> 等方法自動綁定參數；禁止 f-string 拼接 SQL</td></tr>
     <tr><td>sanitize_text_for_db</td><td>所有寫入 DB 的文字必須先清除控制字元</td></tr>
-    <tr><td>OpenCC s2t</td><td>所有 LLM 中文輸出必須經 <code>s2t()</code> 轉換</td></tr>
+    <tr><td>OpenCC s2t</td><td>所有 LLM 中文輸出必須經 <code>s2t()</code> 轉換為正體中文</td></tr>
     <tr><td>向量寫入</td><td>直接傳 Python <code>list[float]</code>，無需手動序列化</td></tr>
     <tr><td>英文輸入</td><td>先翻譯為繁體中文，再做意圖分類與向量搜尋</td></tr>
+    <tr><td>中斷保護</td><td>長耗時任務套用 <code>monitor_disconnect</code> + <code>run_interruptible</code>；斷線時回傳 HTTP 499</td></tr>
   </table>
 
-  <h3 class="forbidden">❌ 禁止事項</h3>
+  <h3 class="forbidden">禁止事項</h3>
   <table>
     <tr><th>禁止行為</th><th>原因</th></tr>
     <tr><td>ORM（<code>DeclarativeBase</code>、<code>session.add()</code>）</td><td>架構規範</td></tr>
-    <tr><td>f-string 拼接 SQL</td><td>SQL Injection 風險</td></tr>
+    <tr><td>f-string 或字串拼接組成 SQL</td><td>SQL Injection 風險</td></tr>
     <tr><td>修改現有資料表欄位</td><td>系統整合約束</td></tr>
     <tr><td>CTE 別名使用 <code>offset</code>/<code>limit</code>/<code>order</code></td><td>PostgreSQL 保留字</td></tr>
     <tr><td>LLM 中文輸出不做 OpenCC</td><td>可能出現簡體字</td></tr>
-    <tr><td>暴露 <code>top_k</code> 參數</td><td>由系統計算 <code>max(TOP_K, top_n+25)</code></td></tr>
+    <tr><td>暴露 <code>top_k</code> 參數給使用者</td><td>由系統計算 <code>max(TOP_K, top_n+25)</code></td></tr>
     <tr><td>tools/ 引用 app/ 模組</td><td>獨立離線工具不得有主應用相依</td></tr>
   </table>
 
-  <h3>環境變數（關鍵設定）</h3>
-  <table>
-    <tr><th>變數名稱</th><th>預設值</th><th>說明</th></tr>
-    <tr><td><code>EMBEDDING_HOST / PORT</code></td><td><code>10.166.57.22 / 40003</code></td><td>Embedding Server 位址</td></tr>
-    <tr><td><code>EMBEDDING_DIM</code></td><td><code>1024</code></td><td>向量維度</td></tr>
-    <tr><td><code>LLM_HOST / PORT</code></td><td><code>10.166.57.22 / 40036</code></td><td>主應用 LLM Server 位址</td></tr>
-    <tr><td><code>PG_HOST / PORT / DB</code></td><td><code>127.0.0.1 / 5432 / fes</code></td><td>PostgreSQL 連線設定</td></tr>
-    <tr><td><code>SIMILARITY_THRESHOLD</code></td><td><code>0.75</code></td><td>cosine distance 上限（越小越嚴格）</td></tr>
-    <tr><td><code>TOP_N</code></td><td><code>5</code></td><td>每軌最終取回筆數</td></tr>
-    <tr><td><code>TOP_K</code></td><td><code>30</code></td><td>初步候選數；系統取 <code>max(TOP_K, top_n+25)</code>，不暴露給使用者</td></tr>
-    <tr><td><code>RETRIEVAL_MERGE_MODE</code></td><td><code>independent</code></td><td>雙軌合並策略：<code>independent</code>（各軌獨立）/ <code>compete</code>（共用配額）</td></tr>
-    <tr><td><code>CHUNK_SIZE</code></td><td><code>500</code></td><td>滑動視窗切塊大小（字元）</td></tr>
-    <tr><td><code>CHUNK_OVERLAP</code></td><td><code>50</code></td><td>切塊重疊字元數</td></tr>
-    <tr><td><code>DOC2JSON_API_URL</code></td><td><code>http://10.166.57.22:43002/...</code></td><td>doc-to-json 降級 API（<strong>tools/ 專用</strong>，主應用不使用）</td></tr>
-  </table>
+  <h3>環境變數（完整列表）</h3>
+  <pre><span class="cm"># ── 資料庫後端切換 ────────────────────────────────────────────────────</span>
+<span class="kw">DB_TYPE</span>=<span class="fn">postgres</span>          <span class="cm"># postgres | mssql</span>
+<span class="kw">DB_SCHEMA</span>=<span class="fn">public</span>          <span class="cm"># public（PG）| dbo（MSSQL）</span>
+
+<span class="cm"># ── PostgreSQL ────────────────────────────────────────────────────────</span>
+<span class="kw">PG_HOST</span>=<span class="fn">127.0.0.1</span>
+<span class="kw">PG_PORT</span>=<span class="fn">5432</span>
+<span class="kw">PG_USER</span>=<span class="fn">postgres</span>
+<span class="kw">PG_PASSWORD</span>=<span class="fn">postgres</span>
+<span class="kw">PG_DB</span>=<span class="fn">fes</span>
+
+<span class="cm"># ── SQL Server 2025（DB_TYPE=mssql 時）──────────────────────────────</span>
+<span class="kw">MSSQL_HOST</span>=<span class="fn">127.0.0.1</span>
+<span class="kw">MSSQL_PORT</span>=<span class="fn">1433</span>
+<span class="kw">MSSQL_USER</span>=<span class="fn">sa</span>
+<span class="kw">MSSQL_PASSWORD</span>=
+<span class="kw">MSSQL_DB</span>=<span class="fn">fes</span>
+<span class="kw">MSSQL_DRIVER</span>=<span class="st">"ODBC Driver 18 for SQL Server"</span>
+<span class="kw">MSSQL_TRUST_CERT</span>=<span class="fn">no</span>
+
+<span class="cm"># ── Embedding Server ──────────────────────────────────────────────────</span>
+<span class="kw">EMBEDDING_HOST</span>=<span class="fn">10.166.57.22</span>
+<span class="kw">EMBEDDING_PORT</span>=<span class="fn">40003</span>
+<span class="kw">EMBEDDING_MODEL</span>=<span class="fn">intfloat/multilingual-e5-large-instruct</span>
+<span class="kw">EMBEDDING_DIM</span>=<span class="fn">1024</span>
+
+<span class="cm"># ── LLM Server ───────────────────────────────────────────────────────</span>
+<span class="kw">LLM_HOST</span>=<span class="fn">10.166.57.22</span>
+<span class="kw">LLM_PORT</span>=<span class="fn">40036</span>
+<span class="kw">LLM_MODEL</span>=<span class="fn">gpt-oss-20b</span>
+
+<span class="cm"># ── 檢索參數 ──────────────────────────────────────────────────────────</span>
+<span class="kw">SIMILARITY_THRESHOLD</span>=<span class="fn">0.75</span>
+<span class="kw">TOP_K</span>=<span class="fn">30</span>              <span class="cm"># 系統取 max(TOP_K, top_n+25)，不暴露給使用者</span>
+<span class="kw">TOP_N</span>=<span class="fn">5</span>
+<span class="kw">RETRIEVAL_MERGE_MODE</span>=<span class="fn">independent</span>  <span class="cm"># independent | compete</span>
+
+<span class="cm"># ── 切塊設定 ──────────────────────────────────────────────────────────</span>
+<span class="kw">CHUNK_SIZE</span>=<span class="fn">500</span>
+<span class="kw">CHUNK_OVERLAP</span>=<span class="fn">50</span>
+
+<span class="cm"># ── doc-to-json 降級 API（tools/ 專用，主應用不使用）────────────────</span>
+<span class="kw">DOC2JSON_API_URL</span>=<span class="fn">http://10.166.57.22:43002/api/doc-to-json/run</span></pre>
 
   <h3>外部服務端點</h3>
   <div class="grid-2">
     <div class="card">
       <h4>Embedding Server</h4>
       <pre>POST http://{EMBEDDING_HOST}:{EMBEDDING_PORT}/v1/embeddings
-Body: { "model": "intfloat/multilingual-e5-large-instruct",
-        "input": "..." }
-Returns: data[0].embedding (list[float], len=1024)</pre>
+Body: {
+  <span class="st">"model"</span>: <span class="fn">"intfloat/multilingual-e5-large-instruct"</span>,
+  <span class="st">"input"</span>: <span class="fn">"..."</span>
+}
+Returns: data[<span class="fn">0</span>].embedding (list[float], len=<span class="fn">1024</span>)</pre>
     </div>
     <div class="card">
       <h4>LLM Server（主應用）</h4>
       <pre>POST http://{LLM_HOST}:{LLM_PORT}/v1/chat/completions
-Body: { "model": "gpt-oss-20b",
-        "messages": [...], "temperature": 0.3 }
-Returns: choices[0].message.content</pre>
+Body: {
+  <span class="st">"model"</span>: <span class="fn">"gpt-oss-20b"</span>,
+  <span class="st">"messages"</span>: [...],
+  <span class="st">"temperature"</span>: <span class="fn">0.3</span>
+}
+Returns: choices[<span class="fn">0</span>].message.content</pre>
     </div>
     <div class="card">
-      <h4>doc-to-json API（PDF 讀取）</h4>
+      <h4>LLM Server（工具專用）</h4>
+      <pre>POST http://10.166.57.22:40041/v1/chat/completions
+<span class="st">"model"</span>: <span class="fn">"gemma-4-26B-A4B-it-mtp"</span>
+<span class="st">"temperature"</span>: <span class="fn">0</span></pre>
+    </div>
+    <div class="card">
+      <h4>doc-to-json API（PDF 讀取，tools/ 專用）</h4>
       <pre>POST http://10.166.57.22:43002/api/doc-to-json/run
 Content-Type: multipart/form-data
 Returns: DocLayoutFieldList</pre>
-    </div>
-    <div class="card">
-      <h4>LLM Server（工具）</h4>
-      <pre>POST http://10.166.57.22:40041/v1/chat/completions
-model: gemma-4-26B-A4B-it-mtp
-temperature: 0</pre>
     </div>
   </div>
 </section>
 
 </main>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'default',
+    themeVariables: {
+      background: '#ffffff',
+      mainBkg: '#ffffff',
+      nodeBorder: '#2563eb',
+      clusterBkg: '#eff6ff',
+    },
+    flowchart: { curve: 'basis', htmlLabels: true },
+  });
+</script>
 </body>
 </html>
