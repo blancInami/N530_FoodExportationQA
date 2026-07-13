@@ -59,11 +59,15 @@ def aggregate_terms(all_terms: list[dict]) -> list[dict]:
         unit_str = str(item.get("responsible_unit", "")).strip()
 
         if zh and en:
-            key = (zh, en)
+            key = (zh, en.lower())
             if key not in stats:
-                stats[key] = {"count": 0, "units": set()}
+                stats[key] = {"count": 0, "units": set(), "sources": set()}
             stats[key]["count"] += 1
-            
+
+            source_str = str(item.get("source_file", "")).strip()
+            if source_str:
+                stats[key]["sources"].add(source_str)
+
             if unit_str:
                 # 拆分可能包含多個單位的字串並去重存入 set
                 parts = [p.strip() for p in unit_splitter.split(unit_str) if p.strip()]
@@ -82,6 +86,7 @@ def aggregate_terms(all_terms: list[dict]) -> list[dict]:
             "英文字詞": en,
             "出現頻率": data["count"],
             "負責單位": sorted(list(data["units"])),
+            "來源檔案": sorted(list(data["sources"])),
         }
         for (zh, en), data in sorted_pairs
     ]
@@ -127,9 +132,11 @@ def export_csv(terms: list[dict], output_path: str) -> None:
         row = t.copy()
         if isinstance(row.get("負責單位"), list):
             row["負責單位"] = "、".join(row["負責單位"])
+        if isinstance(row.get("來源檔案"), list):
+            row["來源檔案"] = ", ".join(row["來源檔案"])
         csv_rows.append(row)
 
-    fieldnames = ["中文字詞", "英文字詞", "出現頻率", "負責單位"]
+    fieldnames = ["中文字詞", "英文字詞", "出現頻率", "負責單位", "來源檔案"]
 
     try:
         # newline="" 防止 Windows 上 csv.writer 產生多餘空行

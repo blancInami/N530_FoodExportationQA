@@ -19,7 +19,7 @@
     - 使用同步 psycopg（tools/ 規範，非 async）
     - 使用 openai.OpenAI 同步客戶端（tools/ 規範）
     - 不得 import 任何 app/ 模組
-    - LLM Server: http://10.166.57.22:40039/v1, model=gemma-4-26B-A4B-it
+    - LLM Server: http://10.166.57.22:40041/v1, model=gemma-4-26B-A4B-it-mtp
 
 驗證：
     - 別名不可與任何原始分工關鍵字完全相同（避免重複）
@@ -40,13 +40,14 @@ import re
 import sys
 from pathlib import Path
 
-import psycopg
 from openai import OpenAI
+
+from db_utils import get_connection, get_schema
 
 # ── 常數 ──────────────────────────────────────────────────────────────────────
 
-LLM_BASE_URL = "http://10.166.57.22:40039/v1"
-LLM_MODEL    = "gemma-4-26B-A4B-it"
+LLM_BASE_URL = "http://10.166.57.22:40041/v1"
+LLM_MODEL    = "gemma-4-26B-A4B-it-mtp"
 
 # 過泛用別名停用詞（即使通過長度驗證也不具鑑別力）
 ALIAS_STOPWORDS: set[str] = {
@@ -98,12 +99,12 @@ def load_units_from_db(
     host: str, port: int, user: str, password: str, dbname: str
 ) -> list[dict]:
     """從「單位對照表」讀取全量資料，回傳 list of {機關, 單位, 分工關鍵字}。"""
-    dsn = f"host={host} port={port} user={user} password={password} dbname={dbname}"
+    schema = get_schema()
     logger.info("連線 DB：%s:%d/%s", host, port, dbname)
-    with psycopg.connect(dsn) as conn:
+    with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                'SELECT "機關", "單位", "分工關鍵字" FROM public."單位對照表" '
+                f'SELECT "機關", "單位", "分工關鍵字" FROM {schema}."單位對照表" '
                 'WHERE "分工關鍵字" IS NOT NULL'
             )
             rows = cur.fetchall()

@@ -4,25 +4,24 @@ This tool reads (機關, 單位, 分工關鍵字), calls LLM to generate 5-8 exp
 and stores them back into the "擴充關鍵字" (TEXT[]) column.
 
 Requirements:
-- PostgreSQL connection (via .env or default)
+- Database connection (PostgreSQL or SQL Server 2025 via DB_TYPE env var)
 - LLM Server running (Gemma 4 requested by system prompt rules)
 """
-import os
 import json
 import logging
+import os
 import re
-import psycopg
-from dotenv import load_dotenv
+
 import requests
+from dotenv import load_dotenv
+
+from db_utils import PLACEHOLDER, encode_array, get_connection, get_schema
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)-8s | %(message)s")
 logger = logging.getLogger(__name__)
 
 load_dotenv()
-
-# Database config
-PG_DSN = f"host={os.getenv('PG_HOST', '127.0.0.1')} port={os.getenv('PG_PORT', '5432')} user={os.getenv('PG_USER', 'postgres')} password={os.getenv('PG_PASSWORD', 'postgres')} dbname={os.getenv('PG_DB', 'fes')}"
 
 # LLM config
 LLM_URL = f"http://{os.getenv('LLM_HOST', '10.166.57.22')}:{os.getenv('LLM_PORT', '40036')}/v1/chat/completions"
@@ -88,34 +87,30 @@ def call_llm(agency, unit, keyword):
 
 def main():
     logger.info("Starting keyword expansion...")
+    schema = get_schema()
     
     try:
-        with psycopg.connect(PG_DSN) as conn:
+        with get_connection() as conn:
             with conn.cursor() as cur:
                 # 1. Fetch all rows
-                cur.execute('SELECT "機關", "單位", "分工關鍵字" FROM public."單位對照表"')
+                cur.execute(f'SELECT "機關", "單位", "分工關鍵字" FROM {schema}."單位對照表"')
                 rows = cur.fetchall()
                 logger.info(f"Found {len(rows)} units to process.")
                 
                 for agency, unit, keyword in rows:
                     logger.info(f"Processing {agency} - {unit} with existing keyword: {keyword}")
-                    expanded,keyword = call_llm(agency or "", unit or "", keyword or "")
+                    expanded, keyword = call_llm(agency or "", unit or "", keyword or "")
                     
                     if expanded and isinstance(expanded, list):
                         logger.info(f"Generated {len(expanded)} keywords: {expanded}")
-                        # 2. Update the row
-                        # PostgreSQL requires array literal formatted like {'item1', 'item2'} or using psycopg's array adaptation
                         cur.execute(
-                            'UPDATE public."單位對照表" SET "擴充關鍵字" = %s WHERE "機關" IS NOT DISTINCT FROM %s AND "單位" IS NOT DISTINCT FROM %s AND "分工關鍵字" IS NOT DISTINCT FROM %s',
-                            (expanded, agency, unit, keyword)
+                            f'UPDATE {schema}."單位對照表" SET "擴充關鍵字" = {PLACEHOLDER} WHERE "機關" IS NOT DISTINCT FROM {PLACEHOLDER} AND "單位" IS NOT DISTINCT FROM {PLACEHOLDER} AND "分工關鍵字" IS NOT DISTINCT FROM {PLACEHOLDER}',
+                            (encode_array(expanded), agency, unit, keyword)
                         )
                     else:
                         logger.warning(f"Skipping {agency} - {unit} due to empty or invalid LLM result.")
                         
-                conn.commit()
-                logger.info("Successfully updated all units.")
-                
-    except Exception as e:
+        logger.info("Successfully updated all units.")
         logger.error(f"Database operation failed: {e}")
 
 if __name__ == "__main__":

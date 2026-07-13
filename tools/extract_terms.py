@@ -29,13 +29,14 @@
 import argparse
 import logging
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from aggregator import aggregate_terms, export_csv
-from chunking import align_chunks, chunk_text
-from file_pairing import discover_pdf_pairs
+from chunking import align_chunks, chunk_by_structure, chunk_text
+from file_pairing import _split_stem, discover_pdf_pairs
 from llm_client import create_openai_client, extract_terms_from_chunk
-from pdf_reader import read_pdf
+from pdf_reader import read_pdf, read_pdf_structured
 from validator import filter_hallucinations
 
 # ── 日誌設定 ──────────────────────────────────────────────────────────────────
@@ -63,6 +64,7 @@ def process_pdf_pair(
     api_url: str,
     chunk_size: int,
     overlap: int,
+    use_structured: bool = True,
 ) -> list[dict]:
     """
     處理一對中英文 PDF，回傳通過反向驗證的詞彙列表。
@@ -83,12 +85,23 @@ def process_pdf_pair(
         若讀取或推論失敗，回傳空列表。
     """
     logger = logging.getLogger(__name__)
+    source_name, _ = _split_stem(zh_path.stem)
     logger.info("─" * 60)
     logger.info("開始處理：中文=%s  英文=%s", zh_path.name, en_path.name)
 
-    # ── 步驟 a：透過 doc-to-json API 讀取 PDF 文字 ────────────────────────
-    zh_text = read_pdf(zh_path, api_url=api_url)
-    en_text = read_pdf(en_path, api_url=api_url)
+    # ── 步驟 a：讀取 PDF 文字 ────────────────────────────────────────
+    if use_structured:
+        # 結構化模式：保留版面語意區塊，由區塊重建全文
+        zh_blocks = read_pdf_structured(zh_path, api_url=api_url)
+        en_blocks = read_pdf_structured(en_path, api_url=api_url)
+        zh_text = "\n\n".join(b["text"] for b in zh_blocks)
+        en_text = "\n\n".join(b["text"] for b in en_blocks)
+    else:
+        # 平文字模式：直接 OCR 取得屍對字串（適用於圖片/掃描式 PDF）
+        logger.info("停用結構化解析，使用平文字 OCR 模式")
+        zh_text = read_pdf(zh_path, api_url=api_url)
+        en_text = read_pdf(en_path, api_url=api_url)
+        zh_blocks, en_blocks = [], []  # 空區塊 → 觸發字元切块降級路徑
 
     # 若任一文件讀取結果為空，跳過此配對
     if not zh_text.strip():
@@ -103,11 +116,24 @@ def process_pdf_pair(
         len(zh_text), len(en_text),
     )
 
-    # ── 步驟 b：分塊 ───────────────────────────────────────────────────────
-    zh_chunks = chunk_text(zh_text, chunk_size=chunk_size, overlap=overlap)
-    en_chunks = chunk_text(en_text, chunk_size=chunk_size, overlap=overlap)
+    # ── 步驟 b：切塊（結構化優先；區塊不足則降級字元切塊） ──────────────
+    _MIN_STRUCTURED_BLOCKS = 5
+    if len(zh_blocks) >= _MIN_STRUCTURED_BLOCKS and len(en_blocks) >= _MIN_STRUCTURED_BLOCKS:
+        logger.info(
+            "使用結構化切塊：中文 %d 個區塊  英文 %d 個區塊",
+            len(zh_blocks), len(en_blocks),
+        )
+        zh_chunks = chunk_by_structure(zh_blocks)
+        en_chunks = chunk_by_structure(en_blocks)
+    else:
+        logger.info(
+            "結構化區塊不足（中文 %d / 英文 %d），降級至字元切塊",
+            len(zh_blocks), len(en_blocks),
+        )
+        zh_chunks = chunk_text(zh_text, chunk_size=chunk_size, overlap=overlap)
+        en_chunks = chunk_text(en_text, chunk_size=chunk_size, overlap=overlap)
 
-    logger.info("分塊完成：中文 %d 塊  英文 %d 塊", len(zh_chunks), len(en_chunks))
+    logger.info("切塊完成：中文 %d 塊  英文 %d 塊", len(zh_chunks), len(en_chunks))
 
     # ── 步驟 c：比例索引對齊 ───────────────────────────────────────────────
     chunk_pairs = align_chunks(zh_chunks, en_chunks)
@@ -134,6 +160,8 @@ def process_pdf_pair(
         "處理完成：%s + %s  → 驗證通過 %d 筆",
         zh_path.name, en_path.name, len(validated_terms),
     )
+    for term in validated_terms:
+        term["source_file"] = source_name
     return validated_terms
 
 
@@ -179,9 +207,22 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--api-url",
-        default="http://10.88.91.72:43002/api/doc-to-json/run",
+        default="http://10.166.57.22:43002/api/doc-to-json/run",
         metavar="URL",
-        help="doc-to-json API 端點（預設：http://10.88.91.72:43002/api/doc-to-json/run）",
+        help="doc-to-json API 端點（預設：http://10.166.57.22:43002/api/doc-to-json/run）",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        metavar="N",
+        help="同時處理的 PDF 配對數（預設：1）",
+    )
+    parser.add_argument(
+        "--no-structured",
+        action="store_true",
+        default=False,
+        help="停用結構化 PDF 解析，改用平文字 OCR 切块（適用於圖片/掃描式 PDF）",
     )
     parser.add_argument(
         "--verbose",
@@ -217,6 +258,8 @@ def main() -> None:
     logger.info("輸出 CSV  ：%s", args.output)
     logger.info("Chunk 大小：%d  重疊：%d", args.chunk_size, args.overlap)
     logger.info("API URL   ：%s", args.api_url)
+    logger.info("並行 Workers：%d", args.workers)
+    logger.info("結構化解析：%s", "停用" if args.no_structured else "啟用")
     logger.info("═" * 60)
 
     # ── 步驟 1：初始化 OpenAI client ─────────────────────────────────────
@@ -235,34 +278,50 @@ def main() -> None:
 
     logger.info("共找到 %d 組配對，開始處理...", len(pdf_pairs))
 
-    # ── 步驟 3：逐對處理 ─────────────────────────────────────────────────
+    # ── 步驟 3：平行處理 ──────────────────────────────────────────────────
     all_validated_terms: list[dict] = []
     success_count = 0
     fail_count = 0
-    total_raw = 0
     total_validated = 0
+    total = len(pdf_pairs)
+    done = 0
 
-    for zh_path, en_path in pdf_pairs:
-        try:
-            pair_terms = process_pdf_pair(
-                zh_path=zh_path,
-                en_path=en_path,
+    with ThreadPoolExecutor(max_workers=args.workers) as executor:
+        future_to_pair = {
+            executor.submit(
+                process_pdf_pair,
+                zh_path=zh,
+                en_path=en,
                 client=client,
                 api_url=args.api_url,
                 chunk_size=args.chunk_size,
                 overlap=args.overlap,
-            )
-            all_validated_terms.extend(pair_terms)
-            total_validated += len(pair_terms)
-            success_count += 1
+                use_structured=not args.no_structured,
+            ): (zh, en)
+            for zh, en in pdf_pairs
+        }
 
-        except Exception as exc:
-            # 捕捉所有未預期的例外，防止單一檔案對失敗中斷整體流程
-            logger.error(
-                "處理失敗（跳過此配對）：中文=%s  英文=%s  錯誤：%s",
-                zh_path.name, en_path.name, exc,
-            )
-            fail_count += 1
+        for future in as_completed(future_to_pair):
+            zh_path, en_path = future_to_pair[future]
+            done += 1
+            remaining = total - done
+            try:
+                pair_terms = future.result()
+                all_validated_terms.extend(pair_terms)
+                total_validated += len(pair_terms)
+                success_count += 1
+                logger.info(
+                    "[進度 %d/%d] 完成：%-30s → 驗證通過 %d 筆  (成功 %d / 失敗 %d / 剩餘 %d)",
+                    done, total, zh_path.stem, len(pair_terms),
+                    success_count, fail_count, remaining,
+                )
+            except Exception as exc:
+                fail_count += 1
+                logger.error(
+                    "[進度 %d/%d] 失敗：%-30s  錯誤：%s  (成功 %d / 失敗 %d / 剩餘 %d)",
+                    done, total, zh_path.name, exc,
+                    success_count, fail_count, remaining,
+                )
 
     # ── 步驟 4：全域聚合 ──────────────────────────────────────────────────
     logger.info("═" * 60)

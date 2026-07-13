@@ -23,8 +23,11 @@ openai>=1.0.0
 # Async HTTP 客戶端（ingest_agent.py：向量化批次呼叫 Embedding Server）
 httpx>=0.27.0
 
-# PostgreSQL 同步驅動（全部工具均使用同步介面，非 async）
+# PostgreSQL 同步驅動（DB_TYPE=postgres，預設）
 psycopg[binary]>=3.1
+
+# SQL Server 同步驅動（DB_TYPE=mssql；需另行安裝 ODBC Driver 18 for SQL Server）
+# pyodbc>=5.0
 
 # 文件轉 Markdown（ingest_agent.py / markdown_converter.py：PDF / DOCX / XLSX 轉換）
 markitdown>=0.1

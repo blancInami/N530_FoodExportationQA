@@ -28,7 +28,7 @@
     │   └─ Track B 知識文獻庫
     │           ├─ cosine_distance 向量搜尋 (內容向量)
     │           ├─ CROSS JOIN 展開相鄰切塊
-    │           └─ JOIN 文獻節點檔 / 知識文獻主檔（取節點標題路徑、文獻名稱、文獻類型）
+    │           └─ JOIN 知識文獻節點檔 / 知識文獻主檔（取節點標題路徑、文獻名稱、文獻類型）
     │
     ├─ Phase 3 LLM 雙語生成
     │       ├─ DictionaryMatcher 動態篩選術語 → XML 注入 Prompt
@@ -41,7 +41,7 @@
 獨立離線工具（tools/）
     ├─ ingest_agent.py         ─ 文件 → markitdown（→ doc-to-json 降級）→ Gemma-4 LLM → INSERT 知識文獻三表
     ├─ batch_ingest_regulations.py ─ 批次掃描 法規/REGULATION|GUIDELINE|QA 子資料夾 → 逐一呼叫 ingest_agent
-    ├─ extract_terms.py        ─ PDF 配對 → doc-to-json API → LLM 擷取 → 反向驗證 → CSV
+    ├─ extract_terms.py        ─ PDF 配對 → doc-to-json API（結構化/平文字雙模式）→ 語意切塊（chunk_by_structure）→ 平行 LLM 擷取 → 反向驗證 → CSV（含來源檔案）
     ├─ db_extractor.py         ─ 問卷題目檔 (HTML) → LLM 擷取 → 寫入官方正規詞彙
     ├─ extract_stems.py        ─ 官方正規詞彙 → 短詞映射 → app/resources/term_mapping.json（供 DictionaryMatcher 線上載入）
     └─ extract_aliases.py      ─ 單位對照表 → 機關別名映射 → app/resources/alias_mapping.json（供 intent.py Aho-Corasick 擴展）
@@ -83,7 +83,7 @@ cp .env .env.local
 
 | 變數 | 預設值 | 說明 |
 |------|--------|------|
-| `EMBEDDING_HOST` | `10.166.57.21` | Embedding Server IP |
+| `EMBEDDING_HOST` | `10.166.57.22` | Embedding Server IP |
 | `EMBEDDING_PORT` | `40003` | Embedding Server Port |
 | `EMBEDDING_MODEL` | `intfloat/multilingual-e5-large-instruct` | 模型名稱 |
 | `LLM_HOST` | `10.166.57.22` | LLM Server IP |
@@ -308,13 +308,20 @@ tools/                          # 離線工具（與主應用無相依，獨立�
     ├── extract_aliases.py      # CLI 入口：單位對照表 → 分批 Gemma-4 → alias_mapping.json
     ├── markdown_converter.py   # convert_to_markdown()（同步 markitdown 封裝）
     ├── extract_terms.py        # CLI 入口：PDF 配對 → 擷取 → 匯出 CSV
-    ├── pdf_reader.py           # doc-to-json REST API 讀取 PDF（中英文統一流程）
+    │                           #   --workers N       並行處理數（預設 1）
+    │                           #   --no-structured   停用結構化解析（圖片型 PDF 用純 OCR）
+    ├── pdf_reader.py           # doc-to-json REST API 讀取 PDF
+    │                           #   read_pdf()            → 平文字字串（向下相容）
+    │                           #   read_pdf_structured() → list[Block]（type/text/page/order）
     ├── db_extractor.py         # CLI 入口：問卷題目檔 HTML → 擷取 → 寫入官方正規詞彙
     ├── llm_client.py           # Gemma 4 LLM 客戶端 + JSON 解析容錯
     ├── file_pairing.py         # PDF 資料夾掃描 + 中英文配對（含遞迴走訪）
     ├── chunking.py             # 文本切塊 + 比例索引對齊
+    │                           #   chunk_text()           字元滑動視窗（降級備用）
+    │                           #   chunk_by_structure()   結構化語意切塊（tiktoken token budget，title 邊界，table 獨立）
     ├── validator.py            # 反向驗證（防幻覺：子字串比對）
     └── aggregator.py           # 詞彙頻率聚合 + CSV 匯出
+                                #   英文字詞去重前統一轉小寫；CSV 欄位：中文字詞、英文字詞、出現頻率、負責單位、來源檔案
 ```
 
 ---
@@ -331,8 +338,8 @@ tools/                          # 離線工具（與主應用無相依，獨立�
 | `單位對照表` | 關鍵字 → 機關/單位 對照（Layer 1 Aho-Corasick 意圖分類；Layer 2 LLM 兜底全量列，含擴充關鍵字） |
 | `官方正規詞彙` | 中文字詞 → 英文字詞（供 DictionaryMatcher Aho-Corasick 篩選） |
 | `知識文獻主檔` | 文獻基本資訊（文獻名稱、類型 REGULATION/GUIDELINE/QA） |
-| `文獻節點檔` | 文獻邏輯節點（節點標題路徑、節點內容） |
-| `文獻切塊檔` | 知識文獻向量切塊（`內容向量` vector(1024)，由 tools/ingest_agent.py 離線管理） |
+| `知識文獻節點檔` | 文獻邏輯節點（節點標題路徑、節點內容） |
+| `知識文獻切塊檔` | 知識文獻向量切塊（`內容向量` vector(1024)，由 tools/ingest_agent.py 離線管理） |
 | `查詢紀錄` | 每次 /ask 呼叫的完整管線日誌 |
 
 ---

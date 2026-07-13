@@ -15,6 +15,18 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# ── Token 計數（tiktoken 內建，不安裝則用字元估計）────────────────────────────────
+try:
+    import tiktoken as _tiktoken
+    _enc = _tiktoken.get_encoding("cl100k_base")
+    def _count_tokens(text: str) -> int:
+        return len(_enc.encode(text))
+except Exception:
+    _tiktoken = None  # type: ignore
+    def _count_tokens(text: str) -> int:  # type: ignore
+        """tiktoken 不可用時的備用估算：字元數 // 2 近似 token 數。"""
+        return len(text) // 2
+
 
 # ── 分塊函式 ──────────────────────────────────────────────────────────────────
 
@@ -64,6 +76,95 @@ def chunk_text(
     logger.debug(
         "文本分塊完成：原始長度=%d  chunk_size=%d  overlap=%d  共 %d 塊",
         len(text), chunk_size, overlap, len(chunks),
+    )
+    return chunks
+
+
+# ── 結構導向切塊函式 ──────────────────────────────────────────────────────────
+
+def chunk_by_structure(
+    blocks: list[dict],
+    max_tokens: int = 1200,
+    fallback_chunk_size: int = 2000,
+    fallback_overlap: int = 300,
+) -> list[str]:
+    """
+    以 read_pdf_structured() 回傳的結構化區塊為輸入，
+    依語意邊界（title 區塊）打包成不超過 max_tokens 的切塊。
+
+    打包策略：
+    1. title 區塊作為語意單元開頭；累積 token 超過 max_tokens/2 時
+       先輸出目前 unit 再開啟新 unit。
+    2. table / table_footnote 獨立輸出，不與 plain text 合併。
+    3. plain text 依序累積；加入後超過 max_tokens 則先 flush，
+       若單一段落本身超限則降級字元切塊（overlap=0）。
+    4. 若輸入無任何 title 區塊（純表格或純文字），
+       降級至 chunk_text() 字元切塊。
+
+    Args:
+        blocks            : read_pdf_structured() 回傳的區塊列表
+        max_tokens        : 每個切塊的最大 token 數（預設 1200）
+        fallback_chunk_size: 降級字元切塊的 chunk_size（預設 2000）
+        fallback_overlap  : 降級字元切塊的 overlap（預設 300）
+
+    Returns:
+        list[str]，每個元素為語意完整的文本切塊。
+    """
+    if not blocks:
+        return []
+
+    has_title = any(b["type"] == "title" for b in blocks)
+    if not has_title:
+        # 無 title 結構 → 降級至字元切塊
+        logger.debug("無 title 區塊，降級至字元切塊")
+        full_text = "\n\n".join(b["text"] for b in blocks)
+        return chunk_text(full_text, chunk_size=fallback_chunk_size, overlap=fallback_overlap)
+
+    chunks: list[str] = []
+    current_parts: list[str] = []
+    current_tokens: int = 0
+
+    def _flush() -> None:
+        nonlocal current_parts, current_tokens
+        if current_parts:
+            chunks.append("\n\n".join(current_parts))
+            current_parts = []
+            current_tokens = 0
+
+    for block in blocks:
+        btype = block["type"]
+        text  = block["text"]
+        tokens = _count_tokens(text)
+
+        if btype in ("table", "table_footnote"):
+            # 表格獨立輸出，不與 plain text 合併
+            _flush()
+            chunks.append(text)
+            continue
+
+        if btype == "title":
+            # title 作為邊界：已累積超過 max_tokens/2 時先輸出
+            if current_tokens > max_tokens // 2:
+                _flush()
+            current_parts.append(text)
+            current_tokens += tokens
+
+        else:  # plain text
+            if current_tokens + tokens > max_tokens and current_parts:
+                _flush()
+            if tokens > max_tokens:
+                # 單一超長段落 → 硬截字元切塊（無 overlap 避免重複）
+                sub_chunks = chunk_text(text, chunk_size=fallback_chunk_size, overlap=0)
+                chunks.extend(sub_chunks)
+                continue
+            current_parts.append(text)
+            current_tokens += tokens
+
+    _flush()
+
+    logger.debug(
+        "結構化切塊完成：輸入 %d 個區塊  輸出 %d 個切塊  max_tokens=%d",
+        len(blocks), len(chunks), max_tokens,
     )
     return chunks
 

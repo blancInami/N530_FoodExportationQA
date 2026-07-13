@@ -3,8 +3,8 @@ tools/ingest_agent.py — 知識文獻離線萃取工具
 
 將文件（PDF / DOCX / XLSX 等）結構化後寫入知識文獻三表：
   - 知識文獻主檔
-  - 文獻節點檔
-  - 文獻切塊檔（向量切塊）
+  - 知識文獻節點檔
+  - 知識文獻切塊檔（向量切塊）
 
 使用方式：
   python tools/ingest_agent.py --input <file_path> --doc-name <name> [options]
@@ -32,32 +32,26 @@ import uuid
 from typing import Any
 
 import httpx
-import psycopg
 from openai import OpenAI
+
+from db_utils import PLACEHOLDER, get_connection, get_schema
 
 # ── 設定 ────────────────────────────────────────────────────────────────────
 
 # LLM（Gemma 4）
-LLM_BASE_URL = os.getenv("TOOLS_LLM_URL", "http://10.166.57.22:40039/v1")
-LLM_MODEL = os.getenv("TOOLS_LLM_MODEL", "gemma-4-26B-A4B-it")
+LLM_BASE_URL = os.getenv("TOOLS_LLM_URL", "http://10.166.57.22:40041/v1")
+LLM_MODEL = os.getenv("TOOLS_LLM_MODEL", "gemma-4-26B-A4B-it-mtp")
 LLM_API_KEY = os.getenv("TOOLS_LLM_API_KEY", "dummy")
 
 # Embedding
-EMBEDDING_URL = os.getenv("EMBEDDING_URL", "http://10.166.57.21:40003/v1/embeddings")
+EMBEDDING_URL = os.getenv("EMBEDDING_URL", "http://10.166.57.22:40003/v1/embeddings")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "intfloat/multilingual-e5-large-instruct")
 
 # doc-to-json API（markitdown 降級備援）
-DOC2JSON_API_URL = os.getenv("DOC2JSON_API_URL", "http://10.88.91.72:43002/api/doc-to-json/run")
+DOC2JSON_API_URL = os.getenv("DOC2JSON_API_URL", "http://10.166.57.22:43002/api/doc-to-json/run")
 
 # markitdown 結果低於此字元數視為空，觸發降級
 MARKITDOWN_MIN_LENGTH = 50
-
-# PostgreSQL
-PG_HOST = os.getenv("PG_HOST", "127.0.0.1")
-PG_PORT = int(os.getenv("PG_PORT", "5432"))
-PG_USER = os.getenv("PG_USER", "postgres")
-PG_PASSWORD = os.getenv("PG_PASSWORD", "postgres")
-PG_DB = os.getenv("PG_DB", "fes")
 
 # 切塊參數
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "500"))
@@ -288,10 +282,6 @@ def get_embeddings_batch(texts: list[str]) -> list[list[float]]:
 
 # ── 資料庫寫入 ───────────────────────────────────────────────────────────────
 
-def build_pg_conninfo() -> str:
-    return f"host={PG_HOST} port={PG_PORT} dbname={PG_DB} user={PG_USER} password={PG_PASSWORD}"
-
-
 def ingest_to_db(
     doc_name: str,
     doc_type: str,
@@ -301,26 +291,38 @@ def ingest_to_db(
     """
     將萃取結果寫入資料庫：
       1. INSERT 知識文獻主檔（一筆）
-      2. INSERT 文獻節點檔（多筆）
-      3. 對每個節點的 content 切塊 + 向量化 → INSERT 文獻切塊檔
-    使用同步 psycopg，executemany 批次寫入。
+      2. INSERT 知識文獻節點檔（多筆）
+      3. 對每個節點的 content 切塊 + 向量化 → INSERT 知識文獻切塊檔
+    支援 PostgreSQL（psycopg）與 SQL Server（pyodbc）雙後端。
     """
+    import os as _os
+    _is_mssql = _os.environ.get("DB_TYPE", "postgres").lower() == "mssql"
+    schema = get_schema()
     doc_pk = uuid.uuid4().hex[:40]
 
-    with psycopg.connect(build_pg_conninfo()) as conn:
+    # Build dialect-specific chunk INSERT SQL
+    if _is_mssql:
+        chunk_insert_sql = (
+            f'INSERT INTO {schema}."知識文獻切塊檔" ("主鍵", "知識文獻節點檔主鍵", "切塊內容", "內容向量", "切塊索引", "詞元數量") '
+            'VALUES (?, ?, ?, CAST(? AS VECTOR(1024)), ?, ?)'
+        )
+    else:
+        chunk_insert_sql = (
+            f'INSERT INTO {schema}."知識文獻切塊檔" ("主鍵", "知識文獻節點檔主鍵", "切塊內容", "內容向量", "切塊索引", "詞元數量") '
+            'VALUES (%s, %s, %s, %s::vector, %s, %s)'
+        )
+
+    with get_connection() as conn:
         with conn.cursor() as cur:
             # ── 寫入知識文獻主檔 ────────────────────────────────────────────
             cur.execute(
-                """
-                INSERT INTO public."知識文獻主檔"
-                    ("主鍵", "文獻名稱", "文獻類型", "原始檔案路徑")
-                VALUES (%s, %s, %s, %s)
-                """,
+                f'INSERT INTO {schema}."知識文獻主檔" ("主鍵", "文獻名稱", "文獻類型", "原始檔案路徑") '
+                f'VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})',
                 (doc_pk, sanitize_text(doc_name), doc_type, sanitize_text(file_path)),
             )
             logger.info("知識文獻主檔寫入：pk=%s  名稱=%s  類型=%s", doc_pk, doc_name, doc_type)
 
-            # ── 寫入文獻節點檔 ──────────────────────────────────────────────
+            # ── 寫入知識文獻節點檔 ──────────────────────────────────────────────
             node_rows: list[tuple] = []
             node_pks: list[str] = []
             for idx, node in enumerate(nodes, start=1):
@@ -334,16 +336,13 @@ def ingest_to_db(
                     idx,
                 ))
             cur.executemany(
-                """
-                INSERT INTO public."文獻節點檔"
-                    ("主鍵", "文獻主檔主鍵", "節點標題路徑", "節點內容", "排序索引")
-                VALUES (%s, %s, %s, %s, %s)
-                """,
+                f'INSERT INTO {schema}."知識文獻節點檔" ("主鍵", "文獻主檔主鍵", "節點標題路徑", "節點內容", "排序索引") '
+                f'VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})',
                 node_rows,
             )
-            logger.info("文獻節點檔寫入：%d 筆", len(node_rows))
+            logger.info("知識文獻節點檔寫入：%d 筆", len(node_rows))
 
-            # ── 切塊 + 向量化 + 寫入文獻切塊檔 ────────────────────────────
+            # ── 切塊 + 向量化 + 寫入知識文獻切塊檔 ────────────────────────────
             total_chunks = 0
             for node_pk, node in zip(node_pks, nodes):
                 content = node["content"]
@@ -359,7 +358,6 @@ def ingest_to_db(
                 chunk_rows: list[tuple] = []
                 for chunk_idx, (chunk_text, vector) in enumerate(zip(sanitized, vectors)):
                     token_count = len(chunk_text.encode("utf-8")) // 4  # 粗估
-                    # 將 vector list[float] 轉成 PostgreSQL vector 字串
                     vector_str = "[" + ",".join(str(v) for v in vector) + "]"
                     chunk_rows.append((
                         str(uuid.uuid4()),
@@ -370,17 +368,8 @@ def ingest_to_db(
                         token_count,
                     ))
 
-                cur.executemany(
-                    """
-                    INSERT INTO public."文獻切塊檔"
-                        ("主鍵", "文獻節點檔主鍵", "切塊內容", "內容向量", "切塊索引", "詞元數量")
-                    VALUES (%s, %s, %s, %s::vector, %s, %s)
-                    """,
-                    chunk_rows,
-                )
+                cur.executemany(chunk_insert_sql, chunk_rows)
                 total_chunks += len(chunk_rows)
-
-            conn.commit()
 
     logger.info(
         "匯入完成：文獻主鍵=%s  節點數=%d  切塊數=%d",

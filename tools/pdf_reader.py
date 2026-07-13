@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 # ── 預設 API 端點 ─────────────────────────────────────────────────────────────
 
-DEFAULT_API_URL = "http://10.88.91.72:43002/api/doc-to-json/run"
+DEFAULT_API_URL = "http://10.166.57.22:43002/api/doc-to-json/run"
 
 # 要保留的文件區塊分類類型
 _VALID_CLASSIFICATIONS = {"plain text", "title", "table", "table_footnote"}
@@ -81,6 +81,56 @@ def read_pdf(file_path: Path, api_url: str = DEFAULT_API_URL, pages=None) -> str
     except Exception as exc:
         logger.error("PDF 讀取失敗，回傳空字串：%s  錯誤：%s", file_path.name, exc)
         return ""
+
+
+def read_pdf_structured(
+    file_path: Path,
+    api_url: str = DEFAULT_API_URL,
+    pages=None,
+) -> list[dict]:
+    """
+    透過 doc-to-json API 讀取 PDF，回傳結構化區塊列表（保留版面語意）。
+
+    每個區塊格式：
+        {
+            "type" : "plain text" | "title" | "table" | "table_footnote",
+            "text" : str,
+            "page" : int,   # 1-based 頁碼
+            "order": int,   # 頁內元素順序
+        }
+
+    Args 與 read_pdf() 相同。
+
+    Returns:
+        結構化區塊列表；失敗時回傳空列表。
+    """
+    logger.info("結構化讀取 PDF：%s", file_path.name)
+
+    try:
+        page_info = _process_page_parameter(pages)
+        pdf_data, upload_filename = _process_pdf_pages(file_path, page_info)
+        if pdf_data is None:
+            logger.error("PDF 頁面處理失敗：%s", file_path.name)
+            return []
+
+        pdfid = _generate_pdfid(file_path.stem, page_info)
+        raw_result = _upload_to_api(pdf_data, upload_filename, pdfid, api_url)
+        if raw_result is None:
+            return []
+
+        blocks = _extract_blocks_from_result(raw_result)
+        logger.info(
+            "PDF 結構化讀取完成：%s  區塊數=%d  (title=%d, plain=%d, table=%d)",
+            file_path.name, len(blocks),
+            sum(1 for b in blocks if b["type"] == "title"),
+            sum(1 for b in blocks if b["type"] == "plain text"),
+            sum(1 for b in blocks if b["type"] in ("table", "table_footnote")),
+        )
+        return blocks
+
+    except Exception as exc:
+        logger.error("PDF 結構化讀取失敗，回傳空列表：%s  錯誤：%s", file_path.name, exc)
+        return []
 
 
 # ── API 上傳函式 ──────────────────────────────────────────────────────────────
@@ -130,6 +180,55 @@ def _upload_to_api(
 
 # ── 文字擷取函式 ──────────────────────────────────────────────────────────────
 
+def _extract_blocks_from_result(result: dict) -> list[dict]:
+    """
+    從 doc-to-json API 回應中擷取結構化區塊列表。
+
+    每個區塊格式：
+        {
+            "type" : "plain text" | "title" | "table" | "table_footnote",
+            "text" : str,
+            "page" : int,   # 1-based 頁碼
+            "order": int,   # 頁內順序
+        }
+
+    Args:
+        result: API 回傳的原始 JSON dict
+
+    Returns:
+        結構化區塊列表；API 無資料時回傳空列表。
+    """
+    doc_layout = result.get("DocLayoutFieldList", [])
+    if not doc_layout:
+        logger.warning("API 回應中無 DocLayoutFieldList 欄位")
+        return []
+
+    blocks: list[dict] = []
+
+    for page_idx, page_fields in enumerate(doc_layout):
+        if isinstance(page_fields, dict) and "elements" in page_fields:
+            elements = page_fields["elements"]
+        elif isinstance(page_fields, list):
+            elements = page_fields
+        else:
+            logger.debug("第 %d 頁格式不符預期，跳過", page_idx + 1)
+            continue
+
+        for order, element in enumerate(elements):
+            cls = element.get("classification", "")
+            if cls in _VALID_CLASSIFICATIONS:
+                content = element.get("content", "").strip()
+                if content:
+                    blocks.append({
+                        "type" : cls,
+                        "text" : content,
+                        "page" : page_idx + 1,
+                        "order": order,
+                    })
+
+    return blocks
+
+
 def _extract_text_from_result(result: dict) -> str:
     """
     從 doc-to-json API 回應中擷取純文字內容。
@@ -146,30 +245,8 @@ def _extract_text_from_result(result: dict) -> str:
     Returns:
         合併後的純文字字串
     """
-    doc_layout = result.get("DocLayoutFieldList", [])
-    if not doc_layout:
-        logger.warning("API 回應中無 DocLayoutFieldList 欄位")
-        return ""
-
-    all_texts: list[str] = []
-
-    for page_idx, page_fields in enumerate(doc_layout):
-        # 每頁可能是含 'elements' key 的 dict，或直接是元素列表
-        if isinstance(page_fields, dict) and "elements" in page_fields:
-            elements = page_fields["elements"]
-        elif isinstance(page_fields, list):
-            elements = page_fields
-        else:
-            logger.debug("第 %d 頁格式不符預期，跳過", page_idx + 1)
-            continue
-
-        for element in elements:
-            if element.get("classification", "") in _VALID_CLASSIFICATIONS:
-                content = element.get("content", "").strip()
-                if content:
-                    all_texts.append(content)
-
-    return "\n\n".join(all_texts)
+    blocks = _extract_blocks_from_result(result)
+    return "\n\n".join(b["text"] for b in blocks)
 
 
 # ── 頁面處理函式 ──────────────────────────────────────────────────────────────

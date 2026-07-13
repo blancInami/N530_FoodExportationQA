@@ -14,7 +14,7 @@
     - 使用同步 psycopg（tools/ 規範，非 async）
     - 使用 openai.OpenAI 同步客戶端（tools/ 規範）
     - 不得 import 任何 app/ 模組
-    - LLM Server: http://10.166.57.22:40039/v1, model=gemma-4-26B-A4B-it
+    - LLM Server: http://10.166.57.22:40041/v1, model=gemma-4-26B-A4B-it-mtp
 
 反向驗證：
     - 短詞必須是官方原詞的子字串（防 LLM 幻覺）
@@ -35,13 +35,14 @@ import re
 import sys
 from pathlib import Path
 
-import psycopg
 from openai import OpenAI
+
+from db_utils import get_connection, get_schema
 
 # ── 常數 ──────────────────────────────────────────────────────────────────────
 
-LLM_BASE_URL = "http://10.166.57.22:40039/v1"
-LLM_MODEL    = "gemma-4-26B-A4B-it"
+LLM_BASE_URL = "http://10.166.57.22:40041/v1"
+LLM_MODEL    = "gemma-4-26B-A4B-it-mtp"
 
 # 短詞最大歧義度：若同一短詞對應超過此數的官方術語，視為過泛用，丟棄
 MAX_AMBIGUITY = 5
@@ -100,11 +101,11 @@ def load_terms_from_db(
     host: str, port: int, user: str, password: str, dbname: str
 ) -> list[str]:
     """從「官方正規詞彙」資料表讀取全量中文字詞。"""
-    dsn = f"host={host} port={port} user={user} password={password} dbname={dbname}"
+    schema = get_schema()
     logger.info("連線 DB：%s:%d/%s", host, port, dbname)
-    with psycopg.connect(dsn) as conn:
+    with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute('SELECT "中文字詞" FROM public."官方正規詞彙" WHERE "中文字詞" IS NOT NULL')
+            cur.execute(f'SELECT "中文字詞" FROM {schema}."官方正規詞彙" WHERE "中文字詞" IS NOT NULL')
             rows = cur.fetchall()
     terms = [row[0].strip() for row in rows if row[0] and row[0].strip()]
     logger.info("共載入 %d 筆官方中文字詞", len(terms))

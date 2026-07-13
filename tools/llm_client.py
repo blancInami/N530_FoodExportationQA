@@ -8,8 +8,8 @@
 
 LLM 連線資訊：
     HOST : 10.166.57.22
-    PORT : 40039
-    MODEL: gemma-4-26B-A4B-it
+    PORT : 40041
+    MODEL: gemma-4-26B-A4B-it-mtp
 """
 
 import json
@@ -22,8 +22,8 @@ logger = logging.getLogger(__name__)
 
 # ── 常數設定 ─────────────────────────────────────────────────────────────────
 
-LLM_BASE_URL = "http://10.166.57.22:40039/v1"
-LLM_MODEL    = "gemma-4-26B-A4B-it"
+LLM_BASE_URL = "http://10.166.57.22:40041/v1"
+LLM_MODEL    = "gemma-4-26B-A4B-it-mtp"
 
 # 系統提示詞：明確限制模型僅能擷取原文中確實存在的詞彙，禁止捏造或推測
 _SYSTEM_PROMPT = """\

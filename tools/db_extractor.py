@@ -31,9 +31,8 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from html.parser import HTMLParser
 
-import psycopg
-
 from aggregator import aggregate_terms, export_csv
+from db_utils import PLACEHOLDER, get_connection, get_schema
 from llm_client import create_openai_client, extract_terms_from_qa
 
 
@@ -138,29 +137,44 @@ def parse_html_bilingual(html_text: str) -> tuple[str, str]:
 
 # ── 資料庫操作 ────────────────────────────────────────────────────────────────
 
-def connect_db(host: str, port: int, user: str, password: str, dbname: str) -> "psycopg.Connection":
-    """建立 PostgreSQL 同步連線。"""
+def connect_db(host: str, port: int, user: str, password: str, dbname: str):
+    """建立同步 DB 連線（回傳不需手動關閉的 raw connection）。"""
     logger = logging.getLogger(__name__)
     logger.info("連線資料庫：%s@%s:%d/%s", user, host, port, dbname)
-    # 使用參數化 conninfo 避免特殊字元問題
-    return psycopg.connect(
-        host=host,
-        port=port,
-        dbname=dbname,
-        user=user,
-        password=password,
-    )
+    import os
+    # Override env vars so db_utils picks up the right host/port/creds
+    os.environ.setdefault("PG_HOST", host)
+    os.environ.setdefault("PG_PORT", str(port))
+    os.environ.setdefault("PG_USER", user)
+    os.environ.setdefault("PG_PASSWORD", password)
+    os.environ.setdefault("PG_DB", dbname)
+    from db_utils import _db_type, _pg_dsn, _mssql_conn_str
+    if _db_type() == "mssql":
+        import pyodbc  # type: ignore[import]
+        return pyodbc.connect(_mssql_conn_str(), autocommit=False)
+    else:
+        import psycopg  # type: ignore[import]
+        return psycopg.connect(
+            host=host, port=port, dbname=dbname, user=user, password=password
+        )
 
 
-def fetch_qa_fields(conn: "psycopg.Connection") -> list[tuple[str, str | None, str | None]]:
+def fetch_qa_fields(conn) -> list[tuple[str, str | None, str | None, str]]:
     """
-    查詢「問卷題目檔」WHERE 是否刪除=0，取得 (主鍵, 題目, 回覆) 列表。
+    查詢「問卷題目檔」 WHERE 是否刪除=0，取得 (主鍵, 題目, 回覆, 問卷名稱) 列表。
+    透過 LEFT JOIN 「問卷主檔」取得問卷名稱，供表追蹤來源。
     使用參數化查詢，不拼接 SQL 字串。
     """
     logger = logging.getLogger(__name__)
+    schema = get_schema()
     with conn.cursor() as cur:
         cur.execute(
-            'SELECT "主鍵", "題目", "回覆" FROM public."問卷題目檔" WHERE "是否刪除" = %s',
+            f'SELECT qt."\u4e3b\u9375", qt."\u984c\u76ee", qt."\u56de\u8986",'
+            f' COALESCE(qm."\u554f\u5377\u540d\u7a31", qt."\u554f\u5377\u4e3b\u6a94\u4e3b\u9375")'
+            f' FROM {schema}."\u554f\u5377\u984c\u76ee\u6a94" qt'
+            f' LEFT JOIN {schema}."\u554f\u5377\u4e3b\u6a94" qm'
+            f'   ON qt."\u554f\u5377\u4e3b\u6a94\u4e3b\u9375" = qm."\u4e3b\u9375"'
+            f' WHERE qt."\u662f\u5426\u522a\u9664" = {PLACEHOLDER}',
             (0,),
         )
         rows = cur.fetchall()
@@ -168,17 +182,18 @@ def fetch_qa_fields(conn: "psycopg.Connection") -> list[tuple[str, str | None, s
     return rows
 
 
-def load_existing_zh_terms(conn: "psycopg.Connection") -> set[str]:
+def load_existing_zh_terms(conn) -> set[str]:
     """載入「官方正規詞彙」中已有的中文字詞集合，用於去重。"""
+    schema = get_schema()
     with conn.cursor() as cur:
         cur.execute(
-            'SELECT "中文字詞" FROM public."官方正規詞彙" WHERE "中文字詞" IS NOT NULL',
+            f'SELECT "中文字詞" FROM {schema}."官方正規詞彙" WHERE "中文字詞" IS NOT NULL',
         )
         rows = cur.fetchall()
     return {row[0] for row in rows}
 
 
-def insert_new_terms(conn: "psycopg.Connection", terms: list[dict]) -> int:
+def insert_new_terms(conn, terms: list[dict]) -> int:
     """
     將新詞彙插入「官方正規詞彙」（僅插入中文字詞不重複的新詞彙）。
 
@@ -208,7 +223,7 @@ def insert_new_terms(conn: "psycopg.Connection", terms: list[dict]) -> int:
 
     with conn.cursor() as cur:
         cur.executemany(
-            'INSERT INTO public."官方正規詞彙" ("中文字詞", "英文字詞") VALUES (%s, %s)',
+            f'INSERT INTO {get_schema()}."官方正規詞彙" ("中文字詞", "英文字詞") VALUES ({PLACEHOLDER}, {PLACEHOLDER})',
             [(t["中文字詞"], t.get("英文字詞", "")) for t in new_entries],
         )
     conn.commit()
@@ -219,17 +234,18 @@ def insert_new_terms(conn: "psycopg.Connection", terms: list[dict]) -> int:
 # ── 詞彙擷取 ──────────────────────────────────────────────────────────────────
 
 def extract_from_qa_pairs(
-    rows: list[tuple[str, str | None, str | None]],
+    rows: list[tuple[str, str | None, str | None, str]],
     client,
     max_workers: int = 5,
 ) -> list[dict]:
     """
     從問卷題目對（題目 + 回覆）中聯合提取雙語專有名詞。
     採平行呼叫 LLM 以加快執行速度。
+    每筆詞彙攜帶 source_file（問卷名稱）供聚合時追蹤來源。
 
     Args:
-        rows: (主鍵, 題目, 回覆) 元組列表
-        client: OpenAI-compatible 客戶端
+        rows      : (\u4e3b\u9375, \u984c\u76ee, \u56de\u8986, \u554f\u5377\u540d\u7a31) 元組列表
+        client    : OpenAI-compatible 客戶端
         max_workers: 平行執行的工作線程數
 
     Returns:
@@ -240,24 +256,30 @@ def extract_from_qa_pairs(
     logger.info("開始平行處理「題目 + 回覆」，筆數=%d，線程數=%d", len(rows), max_workers)
 
     all_terms: list[dict] = []
-    
-    def _task(pk, title, reply, index, total):
+
+    def _task(pk: str, title: str | None, reply: str | None, source_name: str, index: int, total: int) -> list[dict]:
         title_text = title or ""
         reply_text = reply or ""
         if not title_text.strip() and not reply_text.strip():
             return []
-        
-        logger.info("問卷推論 %d / %d（主鍵=%s）", index, total, pk)
-        return extract_terms_from_qa(client, title_text, reply_text)
 
+        logger.info("問卷推論 %d / %d（主鍵=%s，問卷=%s）", index, total, pk, source_name)
+        terms = extract_terms_from_qa(client, title_text, reply_text)
+        for term in terms:
+            term["source_file"] = source_name
+        return terms
+
+    total = len(rows)
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
-            executor.submit(_task, pk, title, reply, i, len(rows)): pk 
-            for i, (pk, title, reply) in enumerate(rows, 1)
+            executor.submit(_task, pk, title, reply, source_name, i, total): pk
+            for i, (pk, title, reply, source_name) in enumerate(rows, 1)
         }
-        
+
+        done = 0
         for future in as_completed(futures):
             pk = futures[future]
+            done += 1
             try:
                 terms = future.result()
                 all_terms.extend(terms)

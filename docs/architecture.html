@@ -256,7 +256,7 @@
     <tr><td>關鍵字比對</td><td><code>ahocorasick-rs</code>（Aho-Corasick 自動機）</td></tr>
     <tr><td>繁簡轉換</td><td><code>opencc-python-reimplemented</code></td></tr>
     <tr><td>Embedding 模型</td><td><code>intfloat/multilingual-e5-large-instruct</code>（1024-dim）</td></tr>
-    <tr><td>LLM 模型</td><td><code>gpt-oss-20b</code>（主應用）、<code>gemma-4-26B-A4B-it</code>（離線工具）</td></tr>
+    <tr><td>LLM 模型</td><td><code>gpt-oss-20b</code>（主應用）、<code>gemma-4-26B-A4B-it-mtp</code>（離線工具）</td></tr>
     <tr><td>Python 版本</td><td>3.11+</td></tr>
   </table>
 </section>
@@ -307,7 +307,7 @@
         <strong>Track B — 知識文獻庫</strong>
         <ul>
           <li>cosine_distance 內容向量 → 聚合 → HAVING 閾值</li>
-          <li>CROSS JOIN 展開相鄰切塊 → JOIN 文獻節點檔（取節點標題路徑）→ JOIN 知識文獻主檔</li>
+          <li>CROSS JOIN 展開相鄰切塊 → JOIN 知識文獻節點檔（取節點標題路徑）→ JOIN 知識文獻主檔</li>
           <li>產生 <code>knowledge_context</code>：依 REGULATION/GUIDELINE/QA 類型格式化 XML 區塊</li>
         </ul>
         <strong>全局合並</strong>：依 <a href="#merge-mode"><code>RETRIEVAL_MERGE_MODE</code></a> 環境變數決定策略
@@ -374,11 +374,11 @@
   <table>
     <tr><th>CTE 名稱</th><th>說明</th></tr>
     <tr><td><code>knowledge_hits</code></td><td>cosine_distance(內容向量)，取 top_k 筆</td></tr>
-    <tr><td><code>knowledge_agg</code></td><td>GROUP BY 文獻節點檔主鍵 + chunk_idx，MIN(distance)，HAVING &lt;= threshold，LIMIT top_n</td></tr>
+    <tr><td><code>knowledge_agg</code></td><td>GROUP BY 知識文獻節點檔主鍵 + chunk_idx，MIN(distance)，HAVING &lt;= threshold，LIMIT top_n</td></tr>
     <tr><td><code>knowledge_adj</code></td><td>VALUES(-1), (0), (1)</td></tr>
     <tr><td><code>knowledge_expanded</code></td><td>CROSS JOIN knowledge_agg × knowledge_adj，計算 neighbor_idx</td></tr>
-    <tr><td><code>knowledge_expanded_chunks</code></td><td>JOIN 文獻切塊檔 取切塊內容</td></tr>
-    <tr><td><code>knowledge_final</code></td><td>JOIN 文獻節點檔（取節點標題路徑）→ JOIN 知識文獻主檔（取文獻名稱、文獻類型）</td></tr>
+    <tr><td><code>knowledge_expanded_chunks</code></td><td>JOIN 知識文獻切塊檔 取切塊內容</td></tr>
+    <tr><td><code>knowledge_final</code></td><td>JOIN 知識文獻節點檔（取節點標題路徑）→ JOIN 知識文獻主檔（取文獻名稱、文獻類型）</td></tr>
   </table>
 
   <div class="alert alert-info">
@@ -557,13 +557,13 @@ _matcher = <span class="fn">DictionaryMatcher</span>()            <span class="c
       <td>知識文獻基本資訊（由 tools/ingest_agent.py 離線寫入）</td>
     </tr>
     <tr>
-      <td><code>文獻節點檔</code></td>
+      <td><code>知識文獻節點檔</code></td>
       <td>主鍵、文獻主檔主鍵、節點標題路徑、節點內容、排序索引</td>
       <td>文獻的邏輯節點（章節 / 條號 / QA 項）</td>
     </tr>
     <tr>
-      <td><code>文獻切塊檔</code></td>
-      <td>主鍵(uuid)、文獻節點檔主鍵、切塊內容、內容向量 vector(1024)、切塊索引</td>
+      <td><code>知識文獻切塊檔</code></td>
+      <td>主鍵(uuid)、知識文獻節點檔主鍵、切塊內容、內容向量 vector(1024)、切塊索引</td>
       <td>知識文獻向量切塊（由 tools/ingest_agent.py 離線管理）</td>
     </tr>
   </table>
@@ -637,7 +637,7 @@ _matcher = <span class="fn">DictionaryMatcher</span>()            <span class="c
   </p>
 
   <div class="alert alert-green">
-    LLM Server（工具專用）：<code>http://10.166.57.22:40039/v1</code>，model = <code>gemma-4-26B-A4B-it</code>
+    LLM Server（工具專用）：<code>http://10.166.57.22:40041/v1</code>，model = <code>gemma-4-26B-A4B-it-mtp</code>
   </div>
 
   <h3>工具一：知識文獻匯入（ingest_agent.py）</h3>
@@ -674,7 +674,7 @@ _matcher = <span class="fn">DictionaryMatcher</span>()            <span class="c
       <div class="phase-label">DB 寫入</div>
       <div class="phase-body">
         多數決 doc_type → INSERT 知識文獻主檔<br/>
-        每節點 → sliding_window_chunk → Batch Embed → INSERT 文獻節點檔 + 文獻切塊檔
+        每節點 → sliding_window_chunk → Batch Embed → INSERT 知識文獻節點檔 + 知識文獻切塊檔
       </div>
     </div>
   </div>
@@ -705,6 +705,31 @@ _matcher = <span class="fn">DictionaryMatcher</span>()            <span class="c
   </div>
 
   <h3>工具三：從 PDF 配對擷取術語（extract_terms.py）</h3>
+  <div class="grid-2" style="margin-bottom:16px">
+    <div class="card">
+      <h4>CLI 選項</h4>
+      <table>
+        <tr><th>參數</th><th>預設</th><th>說明</th></tr>
+        <tr><td><code>--input-dir</code></td><td>（必填）</td><td>PDF 配對所在資料夾</td></tr>
+        <tr><td><code>--output</code></td><td><code>terms_output.csv</code></td><td>輸出 CSV 路徑</td></tr>
+        <tr><td><code>--workers N</code></td><td><code>1</code></td><td>並行處理 PDF 配對數（I/O bound，建議 2–4）</td></tr>
+        <tr><td><code>--no-structured</code></td><td>停用</td><td>關閉結構化解析，改用平文字 OCR（適用圖片型 PDF）</td></tr>
+        <tr><td><code>--chunk-size</code></td><td><code>2000</code></td><td>降級字元切塊大小（結構化模式不影響）</td></tr>
+        <tr><td><code>--overlap</code></td><td><code>300</code></td><td>降級切塊重疊字元數</td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <h4>CSV 輸出格式</h4>
+      <table>
+        <tr><th>欄位</th><th>說明</th></tr>
+        <tr><td><code>中文字詞</code></td><td>擷取到的中文術語</td></tr>
+        <tr><td><code>英文字詞</code></td><td>對應英文術語（統一小寫去重）</td></tr>
+        <tr><td><code>出現頻率</code></td><td>跨檔案累計出現次數</td></tr>
+        <tr><td><code>負責單位</code></td><td>LLM 辨識的主管機關（、分隔）</td></tr>
+        <tr><td><code>來源檔案</code></td><td>出現過此術語的 PDF 前綴名（, 分隔）</td></tr>
+      </table>
+    </div>
+  </div>
   <div class="pipeline">
     <div class="phase">
       <div class="phase-label">掃描</div>
@@ -716,21 +741,36 @@ _matcher = <span class="fn">DictionaryMatcher</span>()            <span class="c
     <div class="phase">
       <div class="phase-label green">PDF 讀取</div>
       <div class="phase-body">
-        <code>pdf_reader.py</code> — POST multipart/form-data 至 doc-to-json API<br/>
-        解析 <code>DocLayoutFieldList</code>，過濾 <code>plain text</code>/<code>title</code>/<code>table</code>/<code>table_footnote</code>
+        <code>pdf_reader.py</code> — POST multipart/form-data 至 doc-to-json API（<code>enable_doc_layout_analysis=True</code>）<br/>
+        <strong>結構化模式（預設）</strong>：<code>read_pdf_structured()</code> 回傳 <code>list[Block]</code>，每個 Block 含 <code>type</code>（plain text / title / table / table_footnote）、<code>text</code>、<code>page</code>、<code>order</code><br/>
+        <strong><code>--no-structured</code> 模式</strong>：<code>read_pdf()</code> 直接取平文字字串（適用掃描/圖片型 PDF）
+        <div class="alert alert-info" style="margin-top:10px">
+          降級觸發條件：中文或英文區塊數 &lt; 5 時，即使未指定 <code>--no-structured</code> 也自動切換為字元切塊路徑。
+        </div>
       </div>
     </div>
     <div class="arrow">↓</div>
     <div class="phase">
       <div class="phase-label warn">切塊</div>
-      <div class="phase-body"><code>chunking.py</code> — 滑動視窗切塊 + 比例索引對齊，確保中英文切塊對應</div>
+      <div class="phase-body">
+        <strong>結構化切塊（<code>chunk_by_structure()</code>）</strong>：<code>chunking.py</code><br/>
+        <ul>
+          <li>以 <code>title</code> 區塊作為語意單元邊界；累積 token &gt; max_tokens/2 時先輸出</li>
+          <li><code>table</code>/<code>table_footnote</code> 獨立輸出，不與 plain text 合併</li>
+          <li>Token 計數：優先使用 <code>tiktoken cl100k_base</code>；未安裝時以 <code>len(text)//2</code> 估算</li>
+          <li>預設 max_tokens=1200（留 800 tokens 作 LLM 輸出緩衝）</li>
+        </ul>
+        <strong>字元切塊（降級，<code>chunk_text()</code>）</strong>：滑動視窗切分 + 比例索引對齊
+      </div>
     </div>
     <div class="arrow">↓</div>
     <div class="phase">
       <div class="phase-label">LLM 擷取</div>
       <div class="phase-body">
         <code>llm_client.py</code> <code>extract_terms_from_chunk(zh_chunk, en_chunk)</code><br/>
-        Gemma 4 返回 <code>[{"zh": "...", "en": "..."}]</code> JSON 陣列
+        Gemma 4 返回 <code>[{"chinese_term": "...", "english_term": "...", "responsible_unit": "..."}]</code> JSON 陣列<br/>
+        透過 <code>ThreadPoolExecutor(max_workers=N)</code> 並行處理多組 PDF 配對，完成時即時輸出進度
+        <code>[進度 X/N] 完成：&lt;檔名&gt; → 驗證通過 M 筆  (成功 S / 失敗 F / 剩餘 R)</code>
       </div>
     </div>
     <div class="arrow">↓</div>
@@ -738,7 +778,13 @@ _matcher = <span class="fn">DictionaryMatcher</span>()            <span class="c
       <div class="phase-label green">驗證 &amp; 匯出</div>
       <div class="phase-body">
         <code>validator.py</code> — 反向驗證（子字串比對防幻覺）<br/>
-        <code>aggregator.py</code> — 頻率聚合去重 → CSV 輸出
+        <code>aggregator.py</code> — 頻率聚合去重<br/>
+        <ul>
+          <li>英文字詞去重前統一轉小寫（避免大小寫差異產生重複筆數）</li>
+          <li>每筆術語攜帶 <code>source_file</code>（PDF 共同前綴，不含語言後綴與副檔名）</li>
+          <li>同一術語對來自多個 PDF 時，<code>來源檔案</code> 欄位以 <code>, </code> 分隔</li>
+        </ul>
+        CSV 欄位順序：<strong>中文字詞、英文字詞、出現頻率、負責單位、來源檔案</strong>
       </div>
     </div>
   </div>
@@ -892,7 +938,7 @@ _matcher = <span class="fn">DictionaryMatcher</span>()            <span class="c
   <h3>環境變數（關鍵設定）</h3>
   <table>
     <tr><th>變數名稱</th><th>預設值</th><th>說明</th></tr>
-    <tr><td><code>EMBEDDING_HOST / PORT</code></td><td><code>10.166.57.21 / 40003</code></td><td>Embedding Server 位址</td></tr>
+    <tr><td><code>EMBEDDING_HOST / PORT</code></td><td><code>10.166.57.22 / 40003</code></td><td>Embedding Server 位址</td></tr>
     <tr><td><code>EMBEDDING_DIM</code></td><td><code>1024</code></td><td>向量維度</td></tr>
     <tr><td><code>LLM_HOST / PORT</code></td><td><code>10.166.57.22 / 40036</code></td><td>主應用 LLM Server 位址</td></tr>
     <tr><td><code>PG_HOST / PORT / DB</code></td><td><code>127.0.0.1 / 5432 / fes</code></td><td>PostgreSQL 連線設定</td></tr>
@@ -902,7 +948,7 @@ _matcher = <span class="fn">DictionaryMatcher</span>()            <span class="c
     <tr><td><code>RETRIEVAL_MERGE_MODE</code></td><td><code>independent</code></td><td>雙軌合並策略：<code>independent</code>（各軌獨立）/ <code>compete</code>（共用配額）</td></tr>
     <tr><td><code>CHUNK_SIZE</code></td><td><code>500</code></td><td>滑動視窗切塊大小（字元）</td></tr>
     <tr><td><code>CHUNK_OVERLAP</code></td><td><code>50</code></td><td>切塊重疊字元數</td></tr>
-    <tr><td><code>DOC2JSON_API_URL</code></td><td><code>http://10.88.91.72:43002/...</code></td><td>doc-to-json 降級 API（<strong>tools/ 專用</strong>，主應用不使用）</td></tr>
+    <tr><td><code>DOC2JSON_API_URL</code></td><td><code>http://10.166.57.22:43002/...</code></td><td>doc-to-json 降級 API（<strong>tools/ 專用</strong>，主應用不使用）</td></tr>
   </table>
 
   <h3>外部服務端點</h3>
@@ -923,14 +969,14 @@ Returns: choices[0].message.content</pre>
     </div>
     <div class="card">
       <h4>doc-to-json API（PDF 讀取）</h4>
-      <pre>POST http://10.88.91.72:43002/api/doc-to-json/run
+      <pre>POST http://10.166.57.22:43002/api/doc-to-json/run
 Content-Type: multipart/form-data
 Returns: DocLayoutFieldList</pre>
     </div>
     <div class="card">
       <h4>LLM Server（工具）</h4>
-      <pre>POST http://10.166.57.22:40039/v1/chat/completions
-model: gemma-4-26B-A4B-it
+      <pre>POST http://10.166.57.22:40041/v1/chat/completions
+model: gemma-4-26B-A4B-it-mtp
 temperature: 0</pre>
     </div>
   </div>
