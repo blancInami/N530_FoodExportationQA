@@ -219,6 +219,7 @@
   <a href="#retrieval">向量檢索</a>
   <a href="#merge-mode">合併模式</a>
   <a href="#dictionary">字典機制</a>
+  <a href="#breakdown">Breakdown</a>
   <a href="#api">API 端點</a>
   <a href="#db">資料庫</a>
   <a href="#modules">模組說明</a>
@@ -314,7 +315,9 @@
             <li><span class="file">📄 retrieval.py</span><span class="desc">hybrid_retrieve() Track A + Track B</span></li>
             <li><span class="file">📄 ingest.py</span><span class="desc">ingest_questionnaire() 問卷向量化</span></li>
             <li><span class="file">📄 translate.py</span><span class="desc">translate_with_dictionary()</span></li>
-            <li><span class="file">📄 breakdown.py</span><span class="desc">extract_questions() / convert_file_to_markdown()</span></li>
+            <li><span class="file">📄 breakdown.py</span><span class="desc">parser-owned candidates + LLM 英文題目萃取</span></li>
+            <li><span class="file">📄 breakdown_preprocessing.py</span><span class="desc">NFKC 正規化與 Markdown 表格線性化工具</span></li>
+            <li><span class="file">📄 breakdown_dlq.py</span><span class="desc">可選 JSONL dead-letter queue writer</span></li>
             <li><span class="file">📄 query_log.py</span><span class="desc">save_query_log() 問答紀錄寫入（fire-and-forget）</span></li>
           </ul>
         </li>
@@ -467,7 +470,7 @@
   <table>
     <tr><th>CTE 名稱</th><th>說明</th></tr>
     <tr><td><code>knowledge_hits</code></td><td>cosine_distance_expr(內容向量, query_vec)，取 top_k 筆</td></tr>
-    <tr><td><code>knowledge_agg</code></td><td>GROUP BY 知識文獻節點檔主鍵 + 切塊索引，MIN(distance)，HAVING &lt;= threshold，LIMIT top_n</td></tr>
+    <tr><td><code>knowledge_agg</code></td><td>GROUP BY 文獻節點檔主鍵 + 切塊索引，MIN(distance)，HAVING &lt;= threshold，LIMIT top_n</td></tr>
     <tr><td><code>knowledge_adj</code></td><td>VALUES(-1), (0), (1)</td></tr>
     <tr><td><code>knowledge_expanded</code></td><td>CROSS JOIN knowledge_agg × knowledge_adj，計算 neighbor_idx</td></tr>
     <tr><td><code>knowledge_expanded_chunks</code></td><td>JOIN 知識文獻切塊檔 取切塊內容</td></tr>
@@ -568,9 +571,69 @@ _matcher = <span class="fn">DictionaryMatcher</span>()               <span class
     <span class="kw">return</span> _matcher</pre>
 </section>
 
-<!-- ═══ 8. API 端點 ════════════════════════════════════════════════════════ -->
+<!-- ═══ 8. Breakdown 題目萃取 ═══════════════════════════════════════════ -->
+<section id="breakdown">
+  <h2>8. Breakdown 題目萃取管線</h2>
+  <p>
+    <code>POST /api/v1/qa/breakdown</code> 將 PDF、Word 或 Excel 問卷轉為 Markdown，
+    產出 <code>question_id</code> 與純英文 <code>question_text</code>。此管線與 RAG 檢索獨立，
+    不寫入問卷資料表。
+  </p>
+
+  <div class="pipeline">
+    <div class="phase">
+      <div class="phase-label gray">轉檔</div>
+      <div class="phase-body"><strong>MarkItDown</strong> 轉成 Markdown；上傳端點以 temporary file 處理，並以 <code>monitor_disconnect()</code> / <code>run_interruptible()</code> 保護長工作。</div>
+    </div>
+    <div class="arrow">↓</div>
+    <div class="phase">
+      <div class="phase-label">前處理</div>
+      <div class="phase-body"><strong>移除明確 Word 目錄與 NFKC 正規化。</strong>僅移除目錄標題後的 <code>#_Toc...</code> 內部連結；一般 URL、HTML/XML 標籤與 fenced code 不會被 NFKC 改寫。</div>
+    </div>
+    <div class="arrow">↓</div>
+    <div class="phase">
+      <div class="phase-label green">Deterministic</div>
+      <div class="phase-body"><strong>表格 fast path 或來源候選掃描。</strong>parser 識別 heading、顯式數字、括號父項、字母項與安全的 Roman 子項，建立不可由 LLM 改寫的 <code>SourceQuestionCandidate</code>。</div>
+    </div>
+    <div class="arrow">↓</div>
+    <div class="phase">
+      <div class="phase-label purple">LLM</div>
+      <div class="phase-body"><strong>只處理英文內容與角色。</strong>每個語義段注入 <code>&lt;Numbering_Context&gt;</code> 和 <code>&lt;Source_Candidates&gt;</code>；LLM 僅回傳 <code>source_key</code>、<code>question_text</code>、<code>role</code>，不得產生題號。</div>
+    </div>
+    <div class="arrow">↓</div>
+    <div class="phase">
+      <div class="phase-label warn">驗證</div>
+      <div class="phase-body"><strong>source-key coverage 與合併。</strong>缺漏或重複 key 會形成診斷報告；啟用 <code>BREAKDOWN_LLM_VERIFY</code> 時才做唯讀 LLM 覆核。只有 <code>continuation</code> 可附加至前一同題號項目，獨立來源即使題號相同也不合併。</div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <h4>已處理的結構模式</h4>
+      <ul>
+        <li>全形／半形數字、字母與標點的 NFKC 統一。</li>
+        <li>MarkItDown Word 目錄內部連結排除。</li>
+        <li>括號父項、字母項、inline Roman 子項。</li>
+        <li>HACCP 中的交叉引用排除，例如 <code>c (ii)</code> 或 <code>of (d)</code> 不會生成假題。</li>
+        <li>退化為連續 <code>| * 1. ... |</code> 的 Word 自動清單，會還原成同父題下的獨立子項。</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>診斷與失敗保留</h4>
+      <p><code>SourceKeyCoverageReport</code> 保存 selected、missing 與 duplicate keys，供後續修復調度使用。</p>
+      <p><code>breakdown_dlq.py</code> 可在啟用時以 JSONL best-effort 寫入人工檢視資料；預設關閉，且預設只記錄 raw payload 的 SHA-256，不保存原文。</p>
+      <p>DLQ 寫入失敗不應影響已成功的 API 回應。</p>
+    </div>
+  </div>
+
+  <div class="alert alert-warn">
+    <strong>目前邊界：</strong>parser 不會依序號連續性補號，也不讓 LLM 猜題號。DOCX 自動編號若在 Markdown 中未留下可辨識 token，尚未讀取 <code>w:numPr</code> / numbering XML 還原。以 <code>Part A</code>～<code>Part H</code> 為 scope、每個 Part 又從裸 <code>1.</code> 重編的問卷，尚未具備專用 topology adapter；必須先建立 Part scope 與人工題目契約。
+  </div>
+</section>
+
+<!-- ═══ 9. API 端點 ════════════════════════════════════════════════════════ -->
 <section id="api">
-  <h2>8. API 端點</h2>
+  <h2>9. API 端點</h2>
   <table>
     <tr><th>Method</th><th>路徑</th><th>說明</th></tr>
     <tr>
@@ -609,9 +672,9 @@ _matcher = <span class="fn">DictionaryMatcher</span>()               <span class
   </table>
 </section>
 
-<!-- ═══ 9. 資料庫 ══════════════════════════════════════════════════════════ -->
+<!-- ═══ 10. 資料庫 ═════════════════════════════════════════════════════════ -->
 <section id="db">
-  <h2>9. 資料庫 Schema</h2>
+  <h2>10. 資料庫 Schema</h2>
   <div class="alert alert-warn">
     <strong>禁止</strong>新增、修改或刪除任何現有欄位。所有查詢以 SQLAlchemy Core 表達式操作。
   </div>
@@ -664,7 +727,7 @@ _matcher = <span class="fn">DictionaryMatcher</span>()               <span class
     </tr>
     <tr>
       <td><code>知識文獻切塊檔</code></td>
-      <td>主鍵(uuid)、知識文獻節點檔主鍵、切塊內容、內容向量 vector(1024)、切塊索引</td>
+      <td>主鍵(uuid)、文獻節點檔主鍵、切塊內容、內容向量 vector(1024)、切塊索引</td>
       <td>知識文獻向量切塊（由 tools/ingest_agent.py 離線管理）</td>
     </tr>
     <tr>
@@ -675,9 +738,9 @@ _matcher = <span class="fn">DictionaryMatcher</span>()               <span class
   </table>
 </section>
 
-<!-- ═══ 10. 模組說明 ════════════════════════════════════════════════════════ -->
+<!-- ═══ 11. 模組說明 ════════════════════════════════════════════════════════ -->
 <section id="modules">
-  <h2>10. 模組責任說明</h2>
+  <h2>11. 模組責任說明</h2>
   <div class="grid-2">
     <div class="card">
       <h4>app/services/embedding.py</h4>
@@ -713,8 +776,16 @@ _matcher = <span class="fn">DictionaryMatcher</span>()               <span class
     </div>
     <div class="card">
       <h4>app/services/breakdown.py</h4>
-      <p><code>convert_file_to_markdown(path, ext)</code>（同步，供 <code>asyncio.to_thread</code>）：以 MarkItDown 轉換 pdf/doc/xlsx 為 Markdown。<br/>
-      <code>extract_questions(markdown)</code>（async）：滑動視窗切塊 + Semaphore 限速並行 LLM 呼叫，萃取英文題號。</p>
+      <p><code>convert_file_to_markdown(path, ext)</code>（同步，供 <code>asyncio.to_thread</code>）：以 MarkItDown 轉換文件為 Markdown。<br/>
+      <code>extract_questions(markdown)</code>（async）：目錄清理、NFKC、結構化表格 fast path、NumberingState / source-key 候選掃描、語義切塊、Semaphore 限速 LLM 與 coverage 驗證。題號由 parser 決定，LLM 只能清理英文文字與選擇候選。</p>
+    </div>
+    <div class="card">
+      <h4>app/services/breakdown_preprocessing.py</h4>
+      <p><code>normalize_markdown_for_breakdown()</code>：對可視文本執行 NFKC，保護 Markdown link target、HTML/XML 與 fenced code；另提供 Markdown table 線性化工具。主解析器目前保留 pipe table，因此線性化尚未啟用為主流程。</p>
+    </div>
+    <div class="card">
+      <h4>app/services/breakdown_dlq.py</h4>
+      <p><code>write_breakdown_dead_letter()</code>：可選、非阻塞 JSONL failure record writer。保存診斷、候選 key 與 payload 摘要；寫入錯誤被隔離，不影響 breakdown 主流程。</p>
     </div>
     <div class="card">
       <h4>app/services/query_log.py</h4>
@@ -749,9 +820,9 @@ _matcher = <span class="fn">DictionaryMatcher</span>()               <span class
   </div>
 </section>
 
-<!-- ═══ 11. 離線工具 ════════════════════════════════════════════════════════ -->
+<!-- ═══ 12. 離線工具 ════════════════════════════════════════════════════════ -->
 <section id="tools">
-  <h2>11. 離線工具（tools/）</h2>
+  <h2>12. 離線工具（tools/）</h2>
   <p>
     <code>tools/</code> 目錄包含獨立 CLI 腳本，與主 FastAPI 應用<strong>完全無相依</strong>。
     使用同步 <code>psycopg</code> 或 <code>pyodbc</code>（由 <code>tools/db_utils.py</code> 統一管理）與 <code>openai.OpenAI</code>（非 AsyncClient）。
@@ -942,7 +1013,7 @@ _matcher = <span class="fn">DictionaryMatcher</span>()               <span class
   </div>
 
   <h3>工具五：短詞映射萃取（extract_stems.py）</h3>
-  <p>離線酢選工具：從 DB「官方正規詞彙」找出每個官方術語的核心短詞，產出 <code>app/resources/term_mapping.json</code>，供 <code>DictionaryMatcher</code> 線上載入以擴大 Aho-Corasick 比對覆蓋率。</p>
+  <p>離線篩選工具：從 DB「官方正規詞彙」找出每個官方術語的核心短詞，產出 <code>app/resources/term_mapping.json</code>，供 <code>DictionaryMatcher</code> 線上載入以擴大 Aho-Corasick 比對覆蓋率。</p>
   <div class="pipeline">
     <div class="phase">
       <div class="phase-label">DB 讀取</div>
@@ -985,7 +1056,7 @@ _matcher = <span class="fn">DictionaryMatcher</span>()               <span class
   </div>
 
   <h3>工具六：機關別名萃取（extract_aliases.py）</h3>
-  <p>離線酢選工具：從 DB「單位對照表」讀取每個機關 / 單位的分工關鍵字，透過 Gemma-4 產出口語別名、舊名稱、英文縮寫等，產出 <code>app/resources/alias_mapping.json</code>，供 <code>IntentClassifier</code> 動態載入。</p>
+  <p>離線篩選工具：從 DB「單位對照表」讀取每個機關 / 單位的分工關鍵字，透過 Gemma-4 產出口語別名、舊名稱、英文縮寫等，產出 <code>app/resources/alias_mapping.json</code>，供 <code>IntentClassifier</code> 動態載入。</p>
   <div class="pipeline">
     <div class="phase">
       <div class="phase-label">DB 讀取</div>
@@ -1031,9 +1102,9 @@ _matcher = <span class="fn">DictionaryMatcher</span>()               <span class
   </div>
 </section>
 
-<!-- ═══ 12. 雙後端支援 ═══════════════════════════════════════════════════ -->
+<!-- ═══ 13. 雙後端支援 ═══════════════════════════════════════════════════ -->
 <section id="dual-backend">
-  <h2>12. 雙後端支援（PostgreSQL / SQL Server 2025）</h2>
+  <h2>13. 雙後端支援（PostgreSQL / SQL Server 2025）</h2>
   <p>
     透過 <code>DB_TYPE=postgres</code>（預設）或 <code>DB_TYPE=mssql</code> 環境變數切換資料庫後端，
     同一份應用程式碼同時支援 PostgreSQL + pgvector 與 SQL Server 2025 原生 VECTOR 型別。
@@ -1103,9 +1174,9 @@ dist = <span class="fn">cosine_distance_expr</span>(
   </div>
 </section>
 
-<!-- ═══ 13. 開發規範 ═══════════════════════════════════════════════════════ -->
+<!-- ═══ 14. 開發規範 ═══════════════════════════════════════════════════════ -->
 <section id="conventions">
-  <h2>13. 開發規範</h2>
+  <h2>14. 開發規範</h2>
 
   <h3>必須遵守</h3>
   <table>

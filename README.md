@@ -1,6 +1,6 @@
 # N530_FoodExportationQA — 食品輸銷問答 API
 
-基於 RAG（Retrieval-Augmented Generation）架構的食品輸銷法規雙語問答系統。
+基於 RAG（Retrieval-Augmented Generation）架構的食品輸銷知識雙語問答系統，整合問卷、法規、作業指引與問答文獻。
 
 ---
 
@@ -20,10 +20,10 @@
     ├─ Embedding Server (multilingual-e5-large-instruct)
     │       └─ enriched_query 向量化
     │
-    ├─ Phase 2 PostgreSQL + pgvector（雙軌並行）
+    ├─ Phase 2 向量檢索（雙軌並行）
     │   ├─ Track A 問卷問答庫
-    │   │       ├─ UNION ALL 雙路徑向量搜尋 (題目向量 + 回覆向量)
-    │   │       ├─ CROSS JOIN 上下文切塊展開 (±1 切塊)
+    │   │       ├─ 單一 embedding 向量搜尋，以 chunk_source 區分 question / answer
+    │   │       ├─ CROSS JOIN 同來源相鄰切塊展開 (±1 切塊)
     │   │       └─ JOIN 問卷主檔 / 問卷附件檔 / 問卷題目檔
     │   └─ Track B 知識文獻庫
     │           ├─ cosine_distance 向量搜尋 (內容向量)
@@ -35,16 +35,17 @@
     │       ├─ <Knowledge_References> 知識文獻內容區塊（若有命中）
     │       └─ XML-structured Prompt → 雙語回覆 (英文 + 繁體中文)
     │
-    └─ Phase 4 回傳組裝 → OpenCC s2t → 9 欄位 AskResponse
+    └─ Phase 4 回傳組裝 → OpenCC s2t → AskResponse → 非同步寫入查詢紀錄
 
 
 獨立離線工具（tools/）
+  ├─ expand_keywords.py      ─ 單位對照表分工關鍵字 → LLM 擴充 → 寫回擴充關鍵字欄位
     ├─ ingest_agent.py         ─ 文件 → markitdown（→ doc-to-json 降級）→ Gemma-4 LLM → INSERT 知識文獻三表
     ├─ batch_ingest_regulations.py ─ 批次掃描 法規/REGULATION|GUIDELINE|QA 子資料夾 → 逐一呼叫 ingest_agent
     ├─ extract_terms.py        ─ PDF 配對 → doc-to-json API（結構化/平文字雙模式）→ 語意切塊（chunk_by_structure）→ 平行 LLM 擷取 → 反向驗證 → CSV（含來源檔案）
     ├─ db_extractor.py         ─ 問卷題目檔 (HTML) → LLM 擷取 → 寫入官方正規詞彙
     ├─ extract_stems.py        ─ 官方正規詞彙 → 短詞映射 → app/resources/term_mapping.json（供 DictionaryMatcher 線上載入）
-    └─ extract_aliases.py      ─ 單位對照表 → 機關別名映射 → app/resources/alias_mapping.json（供 intent.py Aho-Corasick 擴展）
+    └─ extract_aliases.py      ─ 單位對照表分工關鍵字 → 機關別名映射 → app/resources/alias_mapping.json（供 intent.py Aho-Corasick 擴展）
 ```
 
 ---
@@ -54,7 +55,7 @@
 ### 1. 前置需求
 
 - Python 3.11+
-- PostgreSQL with `pgvector` extension installed
+- PostgreSQL with `pgvector` extension installed，或 SQL Server 2025（原生 `VECTOR` 型別）
 - Embedding Server & LLM Server running (see `.env`)
 
 ### 2. 建立虛擬環境
@@ -89,16 +90,33 @@ cp .env .env.local
 | `LLM_HOST` | `10.166.57.22` | LLM Server IP |
 | `LLM_PORT` | `40036` | LLM Server Port |
 | `LLM_MODEL` | `gpt-oss-20b` | 模型名稱 |
+| `DB_TYPE` | `postgres` | 資料庫後端：`postgres` 或 `mssql` |
+| `DB_SCHEMA` | `public` | Schema：PostgreSQL 預設 `public`；SQL Server 預設 `dbo` |
 | `PG_HOST` | `127.0.0.1` | PostgreSQL host |
 | `PG_PORT` | `5432` | PostgreSQL port |
 | `PG_USER` | `postgres` | 使用者 |
 | `PG_PASSWORD` | `postgres` | 密碼 |
 | `PG_DB` | `fes` | 資料庫名稱 |
+| `MSSQL_HOST` | `127.0.0.1` | SQL Server host（`DB_TYPE=mssql` 時使用） |
+| `MSSQL_PORT` | `1433` | SQL Server port |
+| `MSSQL_USER` | `sa` | SQL Server 使用者 |
+| `MSSQL_PASSWORD` | 空字串 | SQL Server 密碼 |
+| `MSSQL_DB` | `fes` | SQL Server 資料庫名稱 |
+| `MSSQL_DRIVER` | `ODBC Driver 18 for SQL Server` | SQL Server ODBC 驅動程式 |
+| `MSSQL_TRUST_CERT` | `false` | 是否信任 SQL Server 憑證 |
 | `SIMILARITY_THRESHOLD` | `0.75` | 向量相似度篩選閾值 (0~1) |
 | `TOP_K` | `30` | 初步向量搜尋候選數量 |
 | `TOP_N` | `5` | 最終聚合取回筆數 |
+| `INTENT_TOP_N` | `1` | 意圖分類回傳的負責單位數量 |
 | `CHUNK_SIZE` | `500` | 切塊字元大小 |
 | `CHUNK_OVERLAP` | `50` | 切塊重疊字元數 |
+| `BREAKDOWN_MAX_CONCURRENCY` | `5` | `/qa/breakdown` 全 LLM fallback 的最大並行請求數 |
+| `BREAKDOWN_LLM_VERIFY` | `false` | 僅在 breakdown 的 source_key 有遺漏或重複時，以 LLM 做唯讀二次驗證；不允許改寫題號 |
+| `BREAKDOWN_NFKC_NORMALIZE` | `true` | Breakdown 可視文本採用 Unicode NFKC 正規化；不改寫 Markdown link target、HTML/XML 標籤與 fenced code |
+| `BREAKDOWN_TABLE_LINEARIZATION_MODE` | `off` | 表格線性化預留開關。目前主解析器仍使用原始 Markdown pipe table，設定非 `off` 時僅記錄警告 |
+| `BREAKDOWN_DLQ_ENABLED` | `false` | 是否啟用 breakdown JSONL dead-letter queue |
+| `BREAKDOWN_DLQ_PATH` | `logs/breakdown-dlq.jsonl` | JSONL dead-letter queue 的輸出路徑 |
+| `BREAKDOWN_DLQ_INCLUDE_RAW_PAYLOAD` | `false` | 是否在 DLQ 保存截斷後原始內容；預設僅保存 SHA-256 摘要 |
 | `RETRIEVAL_MERGE_MODE` | `independent` | 雙軌合併策略：`independent`（各軌獨立取 top_n）/ `compete`（兩軌共用 top_n 配額） |
 
 ### 5. 啟動服務
@@ -122,6 +140,14 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```json
 {
   "question": "原料之加工或生產是否依衛生方式執行？",
+  "similarity_threshold": 0.75,
+  "top_n": 5,
+  "intent_top_n": 1
+}
+```
+
+| 欄位 | 型別 | 必填 | 說明 |
+|------|------|------|------|
 | `similarity_threshold` | float (0~1) | ❌ | 覆蓋預設相似度閾值 |
 | `top_n` | int (1~100) | ❌ | 覆蓋預設最終回傳筆數；`top_k` 自動計算為 `max(TOP_K, top_n+25)` |
 | `intent_top_n` | int (1~10) | ❌ | 覆蓋預設意圖分類回傳單位數 |
@@ -256,10 +282,48 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ]
 ```
 
-**說明**
-- 多語系問卷自動捨棄非英文字元，僅保留英文題目
-- 子題號自動合併為點分十進位格式（如 `2.2` 下的 `(1)` → `2.2.1`）
-- 長文件自動切塊並行推論，部分失敗不中斷整體
+**處理流程與權責**
+
+1. MarkItDown 將檔案轉為 Markdown；顯式 Word 目錄只會移除 `目次` / `Table of Contents` 標題後的連續 `#_Toc...` 內部連結。
+2. 可視文字先經 NFKC 正規化，統一全形數字、英文字母與標點；一般超連結 target、HTML/XML 標籤與 fenced code 維持原樣。
+3. 已辨識的問卷表格優先走 deterministic fast path；不需要 LLM。
+4. 其他文件由 parser 掃描 Markdown heading、顯式小數題號、括號題號、字母項與安全的 inline Roman 子項，建立 `SourceQuestionCandidate`。
+5. 題號由 parser 擁有。LLM 只能回傳 parser 提供的 `source_key`、英文 `question_text` 與 `role`，不得重建或改寫 `question_id`。
+6. 僅明確標示為 `continuation` 的內容可合併到前一同題號項目；相同題號的獨立來源項目會保留為不同結果。
+7. 長文件採語義切塊與 Semaphore 控制並行 LLM 呼叫；`BREAKDOWN_MAX_CONCURRENCY` 可調整並行上限。
+
+**已處理的來源格式**
+
+- 全形／半形混雜的題號與標點。
+- Word 目錄轉成 MarkItDown `#_Toc...` link 的內容。
+- 問卷表格中的顯式題號、括號父項、字母子項與 inline Roman 子項。
+- HACCP 類文本中的 `(i)` / `(ii)` 子項：會排除 `c (ii)`、`of (d)` 等交叉引用，避免誤生新題。
+- MarkItDown 將 Word 自動清單退化為連續 `| * 1. ... |` 表格列時：在同一連續群組內可還原為父題下的 `.1`、`.2`、`.3` 等獨立項目。
+
+**驗證與診斷**
+
+- 每段會計算 `source_key` 的缺漏與重複；設定 `BREAKDOWN_LLM_VERIFY=true` 時，只會把異常 coverage 交由 LLM 唯讀覆核，覆核結果不會改寫題號。
+- `app/services/breakdown_dlq.py` 提供 best-effort JSONL DLQ writer。現階段預設關閉，供後續修復重試與人工檢視流程接入；DLQ 寫入不得影響正常 API 回應。
+
+**目前限制**
+
+- parser 不會依數字連續性自行補號，也不讓 LLM 猜測題號。
+- Word 自動編號若在 MarkItDown 後沒有留下可識別文字或表格列群組，尚未讀取 DOCX `w:numPr` / numbering XML 還原原始層級。
+- 以 `Part A`～`Part H` 為 scope、每個 Part 又從裸 `1.` 重新編號的文件尚未有專用 topology adapter；這類文件需要先建立 Part scope 與可答題目標註後再作 deterministic 支援。
+
+**人工答案 benchmark**
+
+以人工標註 JSON 評估題號 precision、recall、F1、文字正規化差異與耗時：
+
+```bash
+python tools/evaluate_breakdown.py --input "問卷.docx" --expected "人工解答.json" --min-recall 0.95
+
+# 執行 parser + LLM + 來源題號校正的完整評估
+python tools/evaluate_breakdown.py --input "問卷.docx" --expected "人工解答.json" --mode hybrid --min-recall 0.95
+```
+
+當題號 recall 低於 `--min-recall` 時，工具會以 exit code `1` 結束，可作為回歸測試或 CI 品質閘門。
+報告也會提供 `toc_lines_removed` 與 `toc_detection_strategy`，用以確認目錄清理是否生效。
 
 ---
 
@@ -269,11 +333,12 @@ N530_FoodExportationQA/
 ├── requirements.txt
 ├── main.py                     # FastAPI 應用程式入口（含 lifespan、CORS、請求日誌）
 └── app/
-    ├── config.py               # Pydantic Settings，DSN 格式：postgresql+psycopg://...
+    ├── config.py               # Pydantic Settings；依 DB_TYPE 產生 PostgreSQL 或 SQL Server DSN
     ├── database.py             # SQLAlchemy async engine + sessionmaker，init_engine()/close_engine()
+    ├── db_dialect.py           # 雙後端型別與向量距離抽象（MssqlVector、cosine_distance_expr）
     ├── dependencies.py         # get_db_session() → AsyncSession（FastAPI Depends）
     ├── logging_config.py       # 結構化 logging 初始化
-    ├── models.py               # SQLAlchemy Core Table() 定義（10 張資料表，含知識文獻三表）
+    ├── models.py               # SQLAlchemy Core Table() 定義（11 張資料表，含查詢紀錄與知識文獻三表）
     ├── routers/
     │   ├── qa.py               # /api/v1/qa/ask, /api/v1/qa/ingest, /api/v1/qa/breakdown
     │   └── translate.py        # /api/v1/translation/re-translate
@@ -285,12 +350,15 @@ N530_FoodExportationQA/
     │   ├── embedding.py        # 呼叫遠端 Embedding Server
     │   ├── llm.py              # 呼叫遠端 LLM Server
     │   ├── intent.py           # IntentClassifier 雙層意圖分類：
-    │   │                       #   Layer 1 Aho-Corasick（分工關鍵字 + alias_mapping.json 別名）
-    │   │                       #   Layer 2 llm_fallback_classify()（LLM 全量列兜底，僅 Aho-Corasick 無命中時觸發）
+    │   │                       #   Layer 1 Aho-Corasick（分工關鍵字 + 擴充關鍵字 + alias_mapping.json 別名）
+    │   │                       #   Layer 2 llm_fallback_classify()（LLM 全量列兜底，命中數不足時觸發）
     │   ├── retrieval.py        # SQLAlchemy Core 雙軌 CTE 鏈式向量檢索（問卷 + 知識文獻）
     │   ├── ingest.py           # 問卷滑動視窗切塊 + tiktoken + SQLAlchemy insert
+    │   ├── query_log.py        # /qa/ask 完整管線內容非同步寫入查詢紀錄
     │   ├── translate.py        # 官方詞彙翻譯（DictionaryMatcher 篩選）
-    │   └── breakdown.py        # 問卷檔案 → Markdown → LLM 萃取題號
+    │   ├── breakdown.py        # 問卷檔案 → parser-owned candidates → LLM 文字萃取
+    │   ├── breakdown_preprocessing.py # NFKC 正規化與 Markdown 表格線性化工具
+    │   └── breakdown_dlq.py    # 可選 JSONL dead-letter queue writer
     ├── utils/
     │   ├── __init__.py         # sanitize_text_for_db, sliding_window_chunk, normalize_for_matching
     │   ├── dictionary.py       # DictionaryMatcher（Aho-Corasick）+ filter_by_text() + filter_by_text_grounded()
@@ -306,6 +374,8 @@ tools/                          # 離線工具（與主應用無相依，獨立�
     ├── batch_ingest_regulations.py # CLI 入口：批次掃描法規/REGULATION|GUIDELINE|QA 子資料夾，逐一呼叫 ingest_agent
     ├── extract_stems.py        # CLI 入口：官方正規詞彙 → 規則式剝後綴 + Gemma-4 → term_mapping.json
     ├── extract_aliases.py      # CLI 入口：單位對照表 → 分批 Gemma-4 → alias_mapping.json
+    ├── expand_keywords.py      # CLI 入口：分工關鍵字 → LLM 擴充 → 回寫單位對照表.擴充關鍵字
+    ├── db_utils.py             # 雙後端同步連線、Schema、占位符與陣列編碼抽象
     ├── markdown_converter.py   # convert_to_markdown()（同步 markitdown 封裝）
     ├── extract_terms.py        # CLI 入口：PDF 配對 → 擷取 → 匯出 CSV
     │                           #   --workers N       並行處理數（預設 1）
@@ -332,7 +402,7 @@ tools/                          # 離線工具（與主應用無相依，獨立�
 |--------|------|
 | `問卷主檔` | 問卷基本資訊（國家、品項、名稱、機關） |
 | `問卷題目檔` | 題目與回覆原文（HTML 格式，含中英文） |
-| `問卷題目切塊` | 向量化切塊（`題目向量` / `回覆向量` vector(1024)） |
+| `問卷題目切塊` | 向量化切塊（`chunk_source` 區分 `question` / `answer`；單一 `embedding` vector(1024)） |
 | `問卷附件檔` | 問卷相關附件檔案路徑 |
 | `問卷原始檔` | 問卷原始上傳檔案 |
 | `單位對照表` | 關鍵字 → 機關/單位 對照（Layer 1 Aho-Corasick 意圖分類；Layer 2 LLM 兜底全量列，含擴充關鍵字） |
@@ -347,10 +417,11 @@ tools/                          # 離線工具（與主應用無相依，獨立�
 ## 核心設計原則
 
 1. **嚴禁 ORM**：所有資料庫查詢均使用 **SQLAlchemy Core 表達式**（`select()` / `insert()` / `delete()`），複雜查詢以 `.cte()` 鏈式組合
-2. **Async 優先**：所有 DB 操作透過 `AsyncSession`（psycopg3 驅動），HTTP 呼叫使用 `httpx.AsyncClient`
-3. **向量格式**：pgvector 欄位寫入時直接傳 Python `list[float]`，無需手動序列化為字串
-4. **OpenCC 保證**：所有 LLM 輸出的中文均經 `opencc s2t` 確保正體中文
-5. **不修改現有 DB 結構**：欄位定義依照既有 Schema，不新增或改動欄位
-6. **全參數化查詢**：條件篩選使用 `.in_(list)` 等 SQLAlchemy 方法，自動綁定參數，杜絕 SQL Injection
-7. **DictionaryMatcher 動態篩選**：`官方正規詞彙` 6000+ 筆字典透過 Aho-Corasick 自動機，掃描輸入文本後僅注入命中術語（~10-50 筆），避免塞爆 LLM context window
-8. **優雅的斷線中斷機制**：使用 `monitor_disconnect` (依賴 `await request.receive()`) 監聽 ASGI 斷線事件，結合 `run_interruptible` 封裝長耗時任務 (如向量檢索與 LLM 串流生成)，確保客戶端斷線時能立刻拋出 `asyncio.CancelledError`，釋放系統資源並阻止無效的資料庫寫入 (回傳 499 狀態碼)
+2. **Async 優先**：所有 DB 操作透過 `AsyncSession`；PostgreSQL 使用 psycopg3，SQL Server 使用 aioodbc；HTTP 呼叫使用 `httpx.AsyncClient`
+3. **雙後端支援**：以 `DB_TYPE=postgres|mssql` 切換 PostgreSQL + pgvector 或 SQL Server 2025 原生 `VECTOR`；方言差異集中於 `app/db_dialect.py` 與 `tools/db_utils.py`
+4. **向量格式**：應用層一律傳遞 Python `list[float]`；方言抽象層負責對應後端的綁定格式
+5. **OpenCC 保證**：所有 LLM 輸出的中文均經 `opencc s2t` 確保正體中文
+6. **不修改現有 DB 結構**：欄位定義依照既有 Schema，不新增或改動欄位
+7. **全參數化查詢**：條件篩選使用 `.in_(list)` 等 SQLAlchemy 方法，自動綁定參數，杜絕 SQL Injection
+8. **DictionaryMatcher 動態篩選**：`官方正規詞彙` 6000+ 筆字典透過 Aho-Corasick 自動機，掃描輸入文本後僅注入命中術語（~10-50 筆），避免塞爆 LLM context window
+9. **優雅的斷線中斷機制**：使用 `monitor_disconnect` (依賴 `await request.receive()`) 監聽 ASGI 斷線事件，結合 `run_interruptible` 封裝長耗時任務，確保客戶端斷線時能立刻拋出 `asyncio.CancelledError`，釋放系統資源並阻止無效的資料庫寫入（回傳 499 狀態碼）

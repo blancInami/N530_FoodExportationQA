@@ -54,6 +54,15 @@ class Settings(BaseSettings):
     chunk_size: int = 500
     chunk_overlap: int = 50
 
+    # Breakdown Parameters
+    breakdown_max_concurrency: int = 5
+    breakdown_llm_verify: bool = False
+    breakdown_nfkc_normalize: bool = True
+    breakdown_table_linearization_mode: str = "off"
+    breakdown_dlq_enabled: bool = False
+    breakdown_dlq_path: str = "logs/breakdown-dlq.jsonl"
+    breakdown_dlq_include_raw_payload: bool = False
+
     # Logging
     log_level: str = "INFO"
 

@@ -17,11 +17,13 @@ import json
 import logging
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from markitdown import MarkItDown
 
+from app.config import get_settings
 from app.services.llm import chat_completion
+from app.services.breakdown_preprocessing import normalize_markdown_for_breakdown
 
 logger = logging.getLogger(__name__)
 
@@ -29,9 +31,6 @@ logger = logging.getLogger(__name__)
 # 單一區塊送入 LLM 的最大字元數。留足餘量給 system prompt（~600 字）
 # + 狀態注入（~100 字）+ 模型回應 token（max_tokens=4096）。
 _BREAKDOWN_CHUNK_SIZE = 6_000
-
-# LLM 並行呼叫上限，避免同時過多請求打爆 LLM Server。
-_MAX_CONCURRENCY = 3
 
 BREAKDOWN_SYSTEM_PROMPT = """\
 你是一個精準的資料工程解析器，專門處理非結構化多語系問卷。
@@ -52,9 +51,46 @@ BREAKDOWN_SYSTEM_PROMPT = """\
    - 忽略問卷的目錄、填寫說明、空白表格標記以及不包含具體問題的純標題區塊。
 
 【輸出約束】
-- 必須輸出為合法的 JSON Array of Objects，包含 "question_id" 與 "question_text" 兩個鍵值。
+- 若提供 <Source_Candidates>，每一筆必須使用其中一個 "source_key"，並輸出 "question_text"。
+    source_key 對應的 question_id 已由來源 Markdown 決定，不得自行重建、修改或猜測題號。
+    同時輸出 role，值只能是 question、continuation 或 exclude。parent_requirement 一律為 continuation，
+    並且必須使用與其 parent_heading 相同的 question_id。Candidate 的 kind 是來源分類，不能作為 role 值。
+- 若未提供 <Source_Candidates>，輸出合法的 JSON Array of Objects，包含 "question_id" 與 "question_text" 兩個鍵值。
 - 絕對禁止在 JSON 前後加上任何解釋性文字或 Markdown 標籤（如 ```json ）。\
 """
+
+BREAKDOWN_VERIFICATION_SYSTEM_PROMPT = """\
+你是資料萃取結果的驗證器。只能比對提供的 source_key，不得建立、修改或推測題號。
+輸出單一 JSON Object，鍵為 confirmed_keys、missing_keys、duplicate_keys，值皆為字串陣列。
+不得加入任何解釋或 Markdown 標籤。\
+"""
+
+_CHAPTER_HEADING_RE = re.compile(r"^\*\*(\d+)\.\s+(.+?)\*\*$")
+_SUBHEADING_RE = re.compile(r"^\*\*(\d+(?:\.\d+)+)\s+(.+?)\*\*$")
+_PARENTHESIZED_ITEM_RE = re.compile(r"^\*\*(\d+)\)\s+(.+?)\*\*$")
+_INTEGER_CELL_RE = re.compile(r"^\d+$")
+_DETAIL_CELL_RE = re.compile(r"^(\d+)\.(\d+)$")
+_TOC_HEADING_RE = re.compile(r"^(?:目次|table of contents|contents)$", re.IGNORECASE)
+_TOC_LINK_RE = re.compile(r"\]\(#(?:_Toc|toc)[^)]+\)", re.IGNORECASE)
+_ROMAN_CHAPTER_RE = re.compile(r"^#{1,6}\s+.*?\b([IVXLCDM]+)[.．]\s", re.IGNORECASE)
+_NUMBERED_HEADING_RE = re.compile(
+    r"^(#{1,6})\s+(\d+(?:(?:[-－]|\.)\d+)*)(?:[.．])?(?=\s|$|[^\d])"
+)
+_LIST_NUMBER_RE = re.compile(r"(?<![\w.])(\d+)[.．](?=\s)")
+_EXPLICIT_DECIMAL_ITEM_RE = re.compile(
+    r"^(?:\|\s*)?(\d+(?:[.．]\d+)+)(?:[.．])?(?=\s|$)"
+)
+_PARENTHESIZED_PARENT_RE = re.compile(r"^(?:\|\s*)?[(（](\d+)[)）]")
+_PARENTHESIZED_ROMAN_RE = re.compile(
+    r"(?<!\w)[(（]([ivxlcdm]+)[)）]", re.IGNORECASE,
+)
+_ROMAN_SUBITEM_VALUES = frozenset({
+    "i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x",
+})
+_LETTER_ITEM_RE = re.compile(
+    r"(?:^|\|)\s*([a-z])\.(?=\s|\||$|[^\x00-\x7f])", re.IGNORECASE,
+)
+_IMPLICIT_TABLE_LIST_RE = re.compile(r"^\|\s*\*\s*(\d+)[.．](?=\s)")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -104,9 +140,61 @@ def convert_file_to_markdown(file_path: str, file_extension: str) -> str:
     return markdown
 
 
+def _strip_table_of_contents_with_metadata(markdown_text: str) -> tuple[str, int, str]:
+    """Remove an explicit Word-style table of contents without touching body links."""
+    lines = markdown_text.splitlines(keepends=True)
+    cleaned: list[str] = []
+    in_table_of_contents = False
+    removed_lines = 0
+
+    for line in lines:
+        plain_line = re.sub(r"[*#_`]+", "", line).strip()
+        if not in_table_of_contents:
+            if _TOC_HEADING_RE.fullmatch(plain_line):
+                in_table_of_contents = True
+                removed_lines += 1
+                continue
+            cleaned.append(line)
+            continue
+
+        if not plain_line or _TOC_LINK_RE.search(line):
+            removed_lines += 1
+            continue
+
+        in_table_of_contents = False
+        cleaned.append(line)
+
+    strategy = "explicit_heading" if removed_lines else "none"
+    return "".join(cleaned), removed_lines, strategy
+
+
+def strip_table_of_contents(markdown_text: str) -> str:
+    """Remove explicit MarkItDown Word table-of-contents content from Markdown."""
+    cleaned, removed_lines, strategy = _strip_table_of_contents_with_metadata(markdown_text)
+    if removed_lines:
+        logger.info("已移除 Word 目錄：策略=%s  行數=%d", strategy, removed_lines)
+    return cleaned
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  2. 語義切塊（Semantic Chunking）
 # ═══════════════════════════════════════════════════════════════════════════
+
+@dataclass(frozen=True)
+class NumberingState:
+    """The deterministic hierarchical numbering context at a document position."""
+    chapter: str = ""
+    numeric_path: tuple[str, ...] = ()
+    numeric_levels: tuple[int, ...] = ()
+    parenthesized: str = ""
+    letter: str = ""
+    roman_subitem: str = ""
+
+    def parent_prefix(self) -> str:
+        """Return the active parent path, excluding a completed letter item."""
+        parts = [self.chapter, *self.numeric_path, self.parenthesized]
+        return ".".join(part for part in parts if part)
+
 
 @dataclass
 class MarkdownChunk:
@@ -114,13 +202,44 @@ class MarkdownChunk:
 
     Attributes:
         text: 該區塊的 Markdown 文本。
-        last_parent_heading: 區塊內最後出現的「最淺層級」標題行
-            （例如 ``## 2.2 Standards``）。作為下一區塊的狀態繼承依據：
-            前一區塊的 last_parent_heading 會被注入到下一區塊的
-            User Message 開頭，讓 LLM 知道子項目應追溯至哪個父標題。
+        start_numbering_state: 該區塊開始前已知的完整題號狀態。
+        end_numbering_state: 掃描該區塊後的完整題號狀態，供下一塊繼承。
     """
     text: str
     last_parent_heading: str = ""
+    start_numbering_state: NumberingState = field(default_factory=NumberingState)
+    end_numbering_state: NumberingState = field(default_factory=NumberingState)
+
+
+@dataclass(frozen=True)
+class NumberingSegment:
+    """An LLM work unit with the explicit numbering context of its section."""
+    text: str
+    numbering_state: NumberingState
+    scope_reset: bool = False
+
+
+@dataclass(frozen=True)
+class SourceQuestionCandidate:
+    """A parser-owned question ID available for an LLM extraction segment."""
+    source_key: str
+    question_id: str
+    english_text: str = ""
+    kind: str = "question"
+    source_line: int = 0
+
+
+@dataclass(frozen=True)
+class SourceKeyCoverageReport:
+    """Deterministic source-key coverage diagnostics for one LLM segment."""
+    selected_keys: tuple[str, ...]
+    missing_keys: tuple[str, ...]
+    duplicate_keys: tuple[str, ...]
+    verification: dict[str, object] | None = None
+
+    @property
+    def is_complete(self) -> bool:
+        return not self.missing_keys and not self.duplicate_keys
 
 
 def _heading_level(heading_line: str) -> int:
@@ -150,6 +269,166 @@ def _find_last_parent_heading(text: str) -> str:
         if _heading_level(m.group(1)) == min_level:
             return m.group(1).strip()
     return ""
+
+
+def _scan_numbering_state(text: str, state: NumberingState) -> NumberingState:
+    """Advance numbering state using only explicit document markers."""
+    for raw_line in text.splitlines():
+        plain_line = re.sub(r"[*_`]", "", raw_line).strip()
+        roman_match = _ROMAN_CHAPTER_RE.match(raw_line)
+        if roman_match:
+            state = NumberingState(chapter=roman_match.group(1).upper())
+            continue
+
+        heading_match = _NUMBERED_HEADING_RE.match(plain_line)
+        if heading_match:
+            heading_level = len(heading_match.group(1))
+            label_parts = tuple(re.split(r"[-－.]", heading_match.group(2)))
+            ancestor_parts = tuple(
+                part
+                for part, level in zip(state.numeric_path, state.numeric_levels)
+                if level < heading_level
+            )
+            ancestor_levels = tuple(
+                level for level in state.numeric_levels if level < heading_level
+            )
+            state = NumberingState(
+                chapter=state.chapter,
+                numeric_path=(*ancestor_parts, *label_parts),
+                numeric_levels=(*ancestor_levels, *(heading_level for _ in label_parts)),
+            )
+            continue
+
+        decimal_item_match = _EXPLICIT_DECIMAL_ITEM_RE.match(plain_line)
+        if decimal_item_match:
+            label_parts = tuple(re.split(r"[.．]", decimal_item_match.group(1)))
+            state = NumberingState(
+                chapter=state.chapter,
+                numeric_path=label_parts,
+                numeric_levels=(999,) * len(label_parts),
+            )
+            continue
+
+        for match in _LIST_NUMBER_RE.finditer(plain_line):
+            number = match.group(1)
+            if len(state.numeric_path) > 1:
+                numeric_path = (*state.numeric_path[:-1], number)
+                numeric_levels = (*state.numeric_levels[:-1], 999)
+            else:
+                numeric_path = (*state.numeric_path, number)
+                numeric_levels = (*state.numeric_levels, 999)
+            state = NumberingState(
+                chapter=state.chapter,
+                numeric_path=numeric_path,
+                numeric_levels=numeric_levels,
+            )
+
+        parenthesized_match = _PARENTHESIZED_PARENT_RE.match(plain_line)
+        if parenthesized_match:
+            state = NumberingState(
+                chapter=state.chapter,
+                numeric_path=state.numeric_path,
+                numeric_levels=state.numeric_levels,
+                parenthesized=parenthesized_match.group(1),
+            )
+
+        letter_match = _LETTER_ITEM_RE.search(raw_line)
+        if letter_match:
+            state = NumberingState(
+                chapter=state.chapter,
+                numeric_path=state.numeric_path,
+                numeric_levels=state.numeric_levels,
+                parenthesized=state.parenthesized,
+                letter=letter_match.group(1).lower(),
+            )
+
+        for match in _inline_roman_subitem_matches(raw_line, letter_match):
+            state = NumberingState(
+                chapter=state.chapter,
+                numeric_path=state.numeric_path,
+                numeric_levels=state.numeric_levels,
+                parenthesized=state.parenthesized,
+                letter=state.letter,
+                roman_subitem=match.group(1).lower(),
+            )
+
+    return state
+
+
+def _inline_roman_subitem_matches(
+    raw_line: str, letter_match: re.Match[str] | None,
+) -> list[re.Match[str]]:
+    """Return list markers while excluding prose references such as ``c (ii)``."""
+    if letter_match is None:
+        return []
+
+    matches: list[re.Match[str]] = []
+    for match in _PARENTHESIZED_ROMAN_RE.finditer(raw_line):
+        if match.group(1).lower() not in _ROMAN_SUBITEM_VALUES:
+            continue
+        preceding = raw_line[letter_match.end():match.start()].rstrip()
+        if re.search(r"\b[a-z]\s*$", preceding, re.IGNORECASE):
+            continue
+        following = raw_line[match.end():].lstrip()
+        if not following or following.startswith(("(", "（")):
+            continue
+        if following[0].isascii() and following[0].islower():
+            continue
+        if re.search(r"\([a-z]+\)\s*$", preceding, re.IGNORECASE) and (
+            following[0].isascii() and following[0].islower()
+        ):
+            continue
+        matches.append(match)
+    return matches
+
+
+def _attach_numbering_states(chunks: list[MarkdownChunk]) -> None:
+    """Attach sequential start/end numbering states to precomputed chunks."""
+    state = NumberingState()
+    for chunk in chunks:
+        chunk.start_numbering_state = state
+        state = _scan_numbering_state(chunk.text, state)
+        chunk.end_numbering_state = state
+
+
+def _split_numbering_segments(chunks: list[MarkdownChunk]) -> list[NumberingSegment]:
+    """Split chunks at explicit Markdown heading scope changes.
+
+    A chunk can contain both ``I.`` and ``II.`` when it is smaller than the
+    size limit. Its start state is then empty, even though all items below the
+    first heading require the ``I`` prefix. Roman and numbered Markdown headings
+    are explicit scope-reset points, so each section gets deterministic context
+    without splitting ordinary table rows into individual LLM calls.
+    """
+    segments: list[NumberingSegment] = []
+    for chunk in chunks:
+        lines = chunk.text.splitlines(keepends=True)
+        boundaries = []
+        for index, line in enumerate(lines):
+            plain_line = re.sub(r"[*_`]", "", line).strip()
+            if _ROMAN_CHAPTER_RE.match(line) or _NUMBERED_HEADING_RE.match(plain_line):
+                boundaries.append(index)
+        if not boundaries:
+            segments.append(NumberingSegment(chunk.text, chunk.start_numbering_state))
+            continue
+
+        if boundaries[0] != 0:
+            boundaries.insert(0, 0)
+        boundaries.append(len(lines))
+        state = chunk.start_numbering_state
+
+        for start, end in zip(boundaries, boundaries[1:]):
+            text = "".join(lines[start:end]).strip()
+            if not text:
+                continue
+            first_line = lines[start] if start < len(lines) else ""
+            entry_state = _scan_numbering_state(first_line, state)
+            plain_first_line = re.sub(r"[*_`]", "", first_line).strip()
+            scope_reset = bool(_NUMBERED_HEADING_RE.match(plain_first_line))
+            segments.append(NumberingSegment(text, entry_state, scope_reset))
+            state = _scan_numbering_state(text, state)
+
+    return segments
 
 
 def split_markdown_semantically(markdown: str) -> list[MarkdownChunk]:
@@ -227,13 +506,17 @@ def split_markdown_semantically(markdown: str) -> list[MarkdownChunk]:
         buf_len += section_len
 
     _flush()
-    return chunks or [MarkdownChunk(text=markdown, last_parent_heading="")]
+    chunks = chunks or [MarkdownChunk(text=markdown, last_parent_heading="")]
+    _attach_numbering_states(chunks)
+    return chunks
 
 
 def _split_plain_text(text: str) -> list[MarkdownChunk]:
     """無 Markdown 標題時的回退切割：以段落（連續空行）分界。"""
     if len(text) <= _BREAKDOWN_CHUNK_SIZE:
-        return [MarkdownChunk(text=text, last_parent_heading="")]
+        chunks = [MarkdownChunk(text=text, last_parent_heading="")]
+        _attach_numbering_states(chunks)
+        return chunks
 
     chunks: list[MarkdownChunk] = []
     paragraphs = re.split(r"\n{2,}", text)
@@ -250,6 +533,7 @@ def _split_plain_text(text: str) -> list[MarkdownChunk]:
 
     if buf:
         chunks.append(MarkdownChunk(text="\n\n".join(buf), last_parent_heading=""))
+    _attach_numbering_states(chunks)
     return chunks
 
 
@@ -274,7 +558,111 @@ def _split_oversized_section(section_text: str) -> list[str]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  3. LLM 萃取 + JSON 清洗驗證
+#  3. Deterministic questionnaire-table parsing
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _normalize_markdown_cell(cell: str) -> str:
+    """Remove table and emphasis markup while preserving the source text."""
+    text = re.sub(r"\*{1,3}", "", cell)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _table_cells(line: str) -> list[str]:
+    """Return non-empty Markdown table cells in their original order."""
+    if not line.lstrip().startswith("|"):
+        return []
+    cells = [_normalize_markdown_cell(cell) for cell in line.strip().split("|")[1:-1]]
+    return [cell for cell in cells if cell]
+
+
+def _text_after_number(cells: list[str], start: int) -> str:
+    """Collect a table item's text until the next numbered cell."""
+    text_cells: list[str] = []
+    for cell in cells[start + 1:]:
+        if _INTEGER_CELL_RE.fullmatch(cell) or _DETAIL_CELL_RE.fullmatch(cell):
+            break
+        text_cells.append(cell)
+    return " ".join(text_cells).strip()
+
+
+def extract_structured_questions(markdown_text: str) -> list[dict]:
+    """Extract explicitly numbered questionnaire items from MarkItDown tables.
+
+    Word questionnaires can place a chapter number in a heading and question
+    numbers in separate table cells. Keeping those source numbers deterministic
+    avoids asking the LLM to reconstruct hierarchical IDs.
+    """
+    chapter: str | None = None
+    last_main_number: str | None = None
+    last_subheading: str | None = None
+    items: list[dict] = []
+    seen_ids: set[str] = set()
+    found_question_table = False
+
+    def add_item(question_id: str, question_text: str) -> None:
+        if not question_text or question_id in seen_ids:
+            return
+        seen_ids.add(question_id)
+        items.append({"question_id": question_id, "question_text": question_text})
+
+    for raw_line in markdown_text.splitlines():
+        line = raw_line.strip()
+        chapter_match = _CHAPTER_HEADING_RE.fullmatch(line)
+        if chapter_match:
+            chapter = chapter_match.group(1)
+            last_main_number = None
+            last_subheading = None
+            continue
+
+        subheading_match = _SUBHEADING_RE.fullmatch(line)
+        if subheading_match:
+            last_subheading = subheading_match.group(1)
+            continue
+
+        parenthesized_match = _PARENTHESIZED_ITEM_RE.fullmatch(line)
+        if parenthesized_match and last_subheading:
+            add_item(
+                f"{last_subheading}.{parenthesized_match.group(1)}",
+                parenthesized_match.group(2),
+            )
+            continue
+
+        cells = _table_cells(raw_line)
+        if not cells or all(set(cell) <= {"-", ":", " "} for cell in cells):
+            continue
+
+        if any("detailed questions" in cell.lower() for cell in cells):
+            found_question_table = True
+            continue
+
+        if chapter is None or not found_question_table:
+            continue
+
+        for index, cell in enumerate(cells):
+            if _INTEGER_CELL_RE.fullmatch(cell):
+                question_text = _text_after_number(cells, index)
+                if question_text:
+                    last_main_number = cell
+                    add_item(f"{chapter}.{cell}", question_text)
+                continue
+
+            detail_match = _DETAIL_CELL_RE.fullmatch(cell)
+            if detail_match and last_main_number:
+                question_text = _text_after_number(cells, index)
+                if question_text:
+                    add_item(
+                        f"{chapter}.{last_main_number}.{detail_match.group(1)}.{detail_match.group(2)}",
+                        question_text,
+                    )
+
+    if found_question_table and len(items) >= 3:
+        logger.info("結構化表格解析完成：萃取題目=%d 筆", len(items))
+        return items
+    return []
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  4. LLM 萃取 + JSON 清洗驗證
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _clean_llm_json(raw: str) -> str:
@@ -285,23 +673,224 @@ def _clean_llm_json(raw: str) -> str:
 
 
 def _validate_breakdown(data: object) -> list[dict]:
-    """驗證 JSON 結構：必須為 list[dict]，每筆須含 question_id + question_text。"""
+    """Validate LLM items using source_key or the legacy question_id field."""
     if not isinstance(data, list):
         raise ValueError(f"LLM 回傳非 JSON Array，實際類型：{type(data).__name__}")
     validated: list[dict] = []
     for i, item in enumerate(data):
         if not isinstance(item, dict):
             raise ValueError(f"第 {i} 筆資料非物件（dict），實際：{type(item).__name__}")
-        if "question_id" not in item or "question_text" not in item:
+        if "question_text" not in item or (
+            "source_key" not in item and "question_id" not in item
+        ):
             raise ValueError(
-                f"第 {i} 筆資料缺少必要欄位 question_id / question_text，"
+                f"第 {i} 筆資料缺少必要欄位 source_key 或 question_id / question_text，"
                 f"實際鍵值：{list(item.keys())}"
             )
+        role = str(item.get("role", "question")).strip().lower()
+        role = {
+            "parent_requirement": "continuation",
+            "parent_heading": "question",
+            "letter_item": "question",
+            "inline_subitem": "question",
+            "explicit_item": "question",
+            "implicit_list_item": "question",
+        }.get(role, role)
+        if role not in {"question", "continuation", "exclude"}:
+            raise ValueError(f"第 {i} 筆資料 role 無效：{role}")
         validated.append({
-            "question_id": str(item["question_id"]).strip(),
+            "question_id": str(item.get("question_id", "")).strip(),
             "question_text": str(item["question_text"]).strip(),
+            "source_key": str(item.get("source_key", "")).strip(),
+            "role": role,
         })
     return validated
+
+
+def _merge_items_by_question_id(items: list[dict]) -> list[dict]:
+    """Merge only explicit continuations into their preceding source question."""
+    merged: list[dict] = []
+    for item in items:
+        if item["role"] == "exclude":
+            continue
+        if item["role"] != "continuation":
+            merged.append({
+                "question_id": item["question_id"],
+                "question_text": item["question_text"],
+            })
+            continue
+
+        target = next(
+            (
+                existing for existing in reversed(merged)
+                if existing["question_id"] == item["question_id"]
+            ),
+            None,
+        )
+        if target is None:
+            merged.append({
+                "question_id": item["question_id"],
+                "question_text": item["question_text"],
+            })
+            continue
+        normalized_existing = re.sub(r"\s+", " ", target["question_text"]).strip()
+        normalized_new = re.sub(r"\s+", " ", item["question_text"]).strip()
+        if normalized_new and normalized_new not in normalized_existing:
+            target["question_text"] = f"{target['question_text']} {item['question_text']}".strip()
+    return merged
+
+
+def _has_english_content(text: str) -> bool:
+    """Require enough Latin text to avoid creating candidates from Japanese-only lines."""
+    return sum(char.isascii() and char.isalpha() for char in text) >= 3
+
+
+def _build_source_candidates(
+    source_text: str, entry_state: NumberingState,
+) -> list[SourceQuestionCandidate]:
+    """Build parser-owned IDs plus Markdown semantic context for one LLM segment."""
+    candidates: list[SourceQuestionCandidate] = []
+    inline_question_ids: set[str] = set()
+    implicit_list_marker = ""
+    implicit_list_base = ""
+    implicit_list_next = 0
+    state = entry_state
+
+    def add_candidate(
+        question_id: str, text: str, kind: str, source_line: int,
+    ) -> None:
+        if not question_id or not _has_english_content(text):
+            return
+        candidate = SourceQuestionCandidate(
+            f"C{len(candidates) + 1:03d}", question_id, text.strip(), kind, source_line,
+        )
+        if candidate not in candidates:
+            candidates.append(candidate)
+
+    for source_line, raw_line in enumerate(source_text.splitlines(), start=1):
+        implicit_list_match = _IMPLICIT_TABLE_LIST_RE.match(raw_line)
+        state_before_line = state
+        state = _scan_numbering_state(raw_line, state)
+        parent_prefix = state.parent_prefix()
+        if implicit_list_match:
+            marker = implicit_list_match.group(1)
+            if marker != implicit_list_marker:
+                implicit_list_base = state_before_line.parent_prefix()
+                implicit_list_next = int(marker)
+                implicit_list_marker = marker
+            if implicit_list_base:
+                add_candidate(
+                    f"{implicit_list_base}.{implicit_list_next}",
+                    raw_line,
+                    "implicit_list_item",
+                    source_line,
+                )
+                implicit_list_next += 1
+                continue
+        else:
+            implicit_list_marker = ""
+            implicit_list_base = ""
+            implicit_list_next = 0
+        if re.match(r"^#{1,6}\s", raw_line):
+            continue
+        if _EXPLICIT_DECIMAL_ITEM_RE.match(raw_line.strip()):
+            add_candidate(parent_prefix, raw_line, "explicit_item", source_line)
+            continue
+        if _PARENTHESIZED_PARENT_RE.match(raw_line.strip()):
+            add_candidate(parent_prefix, raw_line, "parent_heading", source_line)
+            continue
+
+        letter_match = _LETTER_ITEM_RE.search(raw_line)
+        if letter_match and parent_prefix:
+            letter_id = f"{parent_prefix}.{letter_match.group(1).lower()}"
+            add_candidate(letter_id, raw_line, "letter_item", source_line)
+            for roman_match in _inline_roman_subitem_matches(raw_line, letter_match):
+                inline_question_id = f"{letter_id}.{roman_match.group(1).lower()}"
+                if inline_question_id not in inline_question_ids:
+                    inline_question_ids.add(inline_question_id)
+                    add_candidate(
+                        inline_question_id, raw_line[roman_match.start():],
+                        "inline_subitem", source_line,
+                    )
+            continue
+
+        if parent_prefix and raw_line.strip() and _has_english_content(raw_line):
+            add_candidate(parent_prefix, raw_line, "parent_requirement", source_line)
+
+    return candidates
+
+
+async def _verify_source_key_coverage(
+    source_candidates: list[SourceQuestionCandidate], selected_keys: list[str],
+    chunk_index: int, total_chunks: int,
+) -> SourceKeyCoverageReport:
+    """Ask the LLM to review anomalous key coverage without changing output IDs."""
+    selected_key_set = set(selected_keys)
+    duplicate_keys = sorted(
+        key for key in selected_key_set if selected_keys.count(key) > 1
+    )
+    missing_keys = sorted(
+        candidate.source_key
+        for candidate in source_candidates
+        if candidate.source_key not in selected_key_set
+    )
+    report = SourceKeyCoverageReport(
+        selected_keys=tuple(selected_keys),
+        missing_keys=tuple(missing_keys),
+        duplicate_keys=tuple(duplicate_keys),
+    )
+    if not get_settings().breakdown_llm_verify or not selected_keys:
+        return report
+    if not duplicate_keys and not missing_keys:
+        return report
+
+    candidate_lines = "\n".join(
+        f'{candidate.source_key}: {candidate.question_id}'
+        for candidate in source_candidates
+    )
+    prompt = (
+        "<Source_Candidates>\n"
+        f"{candidate_lines}\n"
+        "</Source_Candidates>\n"
+        "<Extraction_Result>\n"
+        f"selected_keys={json.dumps(selected_keys)}\n"
+        f"detected_missing_keys={json.dumps(missing_keys)}\n"
+        f"detected_duplicate_keys={json.dumps(duplicate_keys)}\n"
+        "</Extraction_Result>"
+    )
+    raw_output = await chat_completion(
+        prompt=prompt,
+        system_prompt=BREAKDOWN_VERIFICATION_SYSTEM_PROMPT,
+        temperature=0,
+        max_tokens=512,
+    )
+    try:
+        verification = json.loads(_clean_llm_json(raw_output))
+        if not isinstance(verification, dict):
+            raise ValueError("驗證回傳非 JSON Object")
+        reported_keys = {
+            key
+            for field in ("confirmed_keys", "missing_keys", "duplicate_keys")
+            for key in verification.get(field, [])
+            if isinstance(key, str)
+        }
+        valid_keys = {candidate.source_key for candidate in source_candidates}
+        if not reported_keys <= valid_keys:
+            raise ValueError("驗證回傳未知的 source_key")
+    except (json.JSONDecodeError, ValueError) as exc:
+        logger.warning("區塊 %d/%d 二次驗證結果無效：%s", chunk_index + 1, total_chunks, exc)
+        return report
+
+    logger.warning(
+        "區塊 %d/%d 題號候選需人工檢視：遺漏=%s 重複=%s LLM驗證=%s",
+        chunk_index + 1, total_chunks, missing_keys, duplicate_keys, verification,
+    )
+    return SourceKeyCoverageReport(
+        selected_keys=report.selected_keys,
+        missing_keys=report.missing_keys,
+        duplicate_keys=report.duplicate_keys,
+        verification=verification,
+    )
 
 
 async def _extract_single_chunk(
@@ -309,6 +898,9 @@ async def _extract_single_chunk(
     chunk_index: int,
     total_chunks: int,
     state_prefix: str | None = None,
+    numbering_state: NumberingState | None = None,
+    scope_reset: bool = False,
+    source_candidates: list[SourceQuestionCandidate] | None = None,
 ) -> list[dict]:
     """
     對單一區塊執行 LLM 萃取。
@@ -323,6 +915,21 @@ async def _extract_single_chunk(
     parts: list[str] = []
     if state_prefix:
         parts.append(state_prefix)
+    if source_candidates:
+        candidates_xml = "\n".join(
+            f'<Candidate source_key="{candidate.source_key}" question_id="{candidate.question_id}" '
+            f'kind="{candidate.kind}" source_line="{candidate.source_line}">'
+            f'{candidate.english_text}'
+            "</Candidate>"
+            for candidate in source_candidates
+        )
+        parts.append(
+            "<Source_Candidates>\n"
+            "以下題號由來源結構固定。僅可回傳列出的 source_key；"
+            "不要輸出或推測 question_id。\n"
+            f"{candidates_xml}\n"
+            "</Source_Candidates>"
+        )
     parts.append(f"<Markdown>\n{chunk_text}\n</Markdown>")
     user_prompt = "\n\n".join(parts)
 
@@ -359,11 +966,116 @@ async def _extract_single_chunk(
         )
         raise ValueError(f"區塊 {label} JSON 解析失敗：{e}") from e
 
-    return _validate_breakdown(parsed)
+    items = _validate_breakdown(parsed)
+    candidate_by_key = {
+        candidate.source_key: candidate
+        for candidate in source_candidates or []
+    }
+    selected_keys = [item["source_key"] for item in items if item["source_key"]]
+    for item in items:
+        if item["source_key"]:
+            candidate = candidate_by_key.get(item["source_key"])
+            if candidate is None:
+                raise ValueError(f"區塊 {label} 回傳未知 source_key：{item['source_key']}")
+            item["question_id"] = candidate.question_id
+            if candidate.kind == "parent_requirement":
+                item["role"] = "continuation"
+        item.pop("source_key", None)
+    if source_candidates:
+        await _verify_source_key_coverage(
+            source_candidates, selected_keys, chunk_index, total_chunks,
+        )
+    if numbering_state:
+        _restore_known_numbering_prefix(
+            items, numbering_state, scope_reset, chunk_text,
+        )
+    return _merge_items_by_question_id(items)
+
+
+def _restore_known_numbering_prefix(
+    items: list[dict],
+    state: NumberingState,
+    scope_reset: bool = False,
+    source_text: str = "",
+) -> None:
+    """Restore a prefix only where the chunk's explicit state proves it."""
+    parent_prefix = state.parent_prefix()
+    prefix_parts = parent_prefix.split(".") if parent_prefix else []
+    if not prefix_parts:
+        return
+
+    for item in items:
+        source_question_id = _source_question_id(
+            source_text, item["question_text"], state,
+        )
+        if source_question_id:
+            item["question_id"] = source_question_id
+            continue
+        question_parts = [part for part in item["question_id"].split(".") if part]
+        if not question_parts:
+            continue
+        if state.chapter and not state.numeric_path and not state.parenthesized:
+            if question_parts[0] != state.chapter:
+                item["question_id"] = ".".join([state.chapter, *question_parts])
+            continue
+        if scope_reset and question_parts[0] == state.chapter:
+            state_path = list(state.numeric_path)
+            question_path = question_parts[1:]
+            for index in range(len(question_path) - len(state_path) + 1):
+                if question_path[index:index + len(state_path)] == state_path:
+                    item["question_id"] = ".".join([
+                        state.chapter,
+                        *state_path,
+                        *question_path[index + len(state_path):],
+                    ])
+                    break
+        overlap = min(len(prefix_parts), len(question_parts))
+        while overlap and prefix_parts[-overlap:] != question_parts[:overlap]:
+            overlap -= 1
+        if overlap:
+            item["question_id"] = ".".join([*prefix_parts, *question_parts[overlap:]])
+        elif len(question_parts) == 1 and question_parts[0].isalpha():
+            item["question_id"] = ".".join([*prefix_parts, question_parts[0]])
+
+
+def _source_question_id(
+    source_text: str, question_text: str, entry_state: NumberingState,
+) -> str | None:
+    """Return the explicit source ID when an LLM item's text identifies its line."""
+    normalized_question = re.sub(r"[^a-z0-9]+", "", question_text.lower())
+    if len(normalized_question) < 24:
+        return None
+
+    state = entry_state
+    for raw_line in source_text.splitlines():
+        state = _scan_numbering_state(raw_line, state)
+        normalized_line = re.sub(r"[^a-z0-9]+", "", raw_line.lower())
+        if normalized_question not in normalized_line:
+            continue
+        parent_prefix = state.parent_prefix()
+        if not parent_prefix:
+            continue
+        if not state.letter:
+            if _EXPLICIT_DECIMAL_ITEM_RE.match(raw_line.strip()):
+                return parent_prefix
+            if _PARENTHESIZED_PARENT_RE.match(raw_line.strip()):
+                return parent_prefix
+            continue
+
+        letter_id = f"{parent_prefix}.{state.letter}"
+        letter_match = _LETTER_ITEM_RE.search(raw_line)
+        roman_matches = _inline_roman_subitem_matches(raw_line, letter_match)
+        for index, match in enumerate(roman_matches):
+            end = roman_matches[index + 1].start() if index + 1 < len(roman_matches) else len(raw_line)
+            normalized_subitem = re.sub(r"[^a-z0-9]+", "", raw_line[match.start():end].lower())
+            if normalized_question in normalized_subitem:
+                return f"{letter_id}.{match.group(1).lower()}"
+        return letter_id
+    return None
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  4. Map-Reduce 萃取管線（公開介面）
+#  5. Map-Reduce 萃取管線（公開介面）
 # ═══════════════════════════════════════════════════════════════════════════
 
 async def extract_questions(markdown_text: str) -> list[dict]:
@@ -375,8 +1087,8 @@ async def extract_questions(markdown_text: str) -> list[dict]:
     **Map 階段**
       1. ``split_markdown_semantically()`` 將 Markdown 依標題層級拆為
          多個 ``MarkdownChunk``，每塊 ≤ ``_BREAKDOWN_CHUNK_SIZE`` 字元。
-      2. 為每個區塊建立 LLM 推論任務。若為第 i 塊（i>0），動態注入
-         第 i-1 塊的 ``last_parent_heading`` 作為編號追溯上下文。
+        2. 為每個區塊建立 LLM 推論任務，動態注入該區塊開始前已掃描的
+            完整題號狀態，讓非標題的章節編號跨切塊仍可被追溯。
       3. ``asyncio.gather`` 並行呼叫 LLM，以 ``Semaphore`` 控制最多
          ``_MAX_CONCURRENCY`` 個同時請求。
 
@@ -391,6 +1103,26 @@ async def extract_questions(markdown_text: str) -> list[dict]:
         ValueError: 當所有區塊均無法成功萃取時。
     """
     pipeline_start = time.perf_counter()
+    markdown_text = strip_table_of_contents(markdown_text)
+    settings = get_settings()
+    if settings.breakdown_nfkc_normalize:
+        markdown_text = normalize_markdown_for_breakdown(
+            markdown_text,
+            linearize_tables=False,
+        )
+    if settings.breakdown_table_linearization_mode != "off":
+        logger.warning(
+            "表格線性化尚未接入主解析器，已忽略設定：mode=%s",
+            settings.breakdown_table_linearization_mode,
+        )
+
+    structured_items = extract_structured_questions(markdown_text)
+    if structured_items:
+        logger.info(
+            "使用結構化表格快速路徑：略過 LLM 萃取，題目=%d 筆",
+            len(structured_items),
+        )
+        return structured_items
 
     # ── Step 1: 語義切塊 ──────────────────────────────────────────────────
     chunks = split_markdown_semantically(markdown_text)
@@ -400,24 +1132,32 @@ async def extract_questions(markdown_text: str) -> list[dict]:
     )
 
     # ── Step 2 & 3: Map — 建立並行任務（含跨區塊狀態注入）────────────────
-    sem = asyncio.Semaphore(_MAX_CONCURRENCY)
-    total = len(chunks)
+    segments = _split_numbering_segments(chunks)
+    max_concurrency = settings.breakdown_max_concurrency
+    sem = asyncio.Semaphore(max_concurrency)
+    total = len(segments)
+    logger.info("Breakdown LLM 並發上限：%d", max_concurrency)
 
     async def _guarded_extract(idx: int) -> list[dict]:
         """受 Semaphore 控制的單區塊萃取。"""
-        # 狀態繼承：若非首塊，注入前一區塊最後出現的最淺層級父標題
+        # 以文件順序掃描出的題號狀態，保留不會出現在 Markdown heading 的層級。
         state_prefix: str | None = None
-        if idx > 0:
-            prev_heading = chunks[idx - 1].last_parent_heading
-            if prev_heading:
-                state_prefix = (
-                    f"注意：此文本為接續段落。"
-                    f"上一段落的最後一個父標題為『{prev_heading}』。"
-                    f"請在遇到子項目時，以此標題作為編號追溯的基礎。"
-                )
+        parent_prefix = segments[idx].numbering_state.parent_prefix()
+        if parent_prefix:
+            state_prefix = (
+                "<Numbering_Context>\n"
+                f"此文本接續前文；已由來源明確辨識的父題號為 {parent_prefix}。\n"
+                "子項目必須接續此父題號；不得捨棄任何既有層級。\n"
+                "</Numbering_Context>"
+            )
         async with sem:
             return await _extract_single_chunk(
-                chunks[idx].text, idx, total, state_prefix,
+                segments[idx].text, idx, total, state_prefix,
+                segments[idx].numbering_state,
+                segments[idx].scope_reset,
+                _build_source_candidates(
+                    segments[idx].text, segments[idx].numbering_state,
+                ),
             )
 
     tasks = [_guarded_extract(i) for i in range(total)]
