@@ -164,7 +164,7 @@ GO
 IF OBJECT_ID(N'[dbo].[知識文獻切塊檔]', N'U') IS NULL
 CREATE TABLE [dbo].[知識文獻切塊檔] (
     [主鍵]           UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
-    [知識文獻節點檔主鍵]  NVARCHAR(40)     NOT NULL,
+    [文獻節點檔主鍵]  NVARCHAR(40)     NOT NULL,
     [切塊內容]        NVARCHAR(MAX),
     [內容向量]        VECTOR(1024),
     [切塊索引]        INT              NOT NULL,

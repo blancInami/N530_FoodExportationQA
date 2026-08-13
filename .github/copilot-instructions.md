@@ -219,7 +219,7 @@ CREATE TABLE IF NOT EXISTS public."知識文獻節點檔" (
 -- 知識文獻切塊檔：向量化後的切塊資料（由 tools/ingest_agent.py 離線寫入）
 CREATE TABLE IF NOT EXISTS public."知識文獻切塊檔" (
     "主鍵"         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    "知識文獻節點檔主鍵" character varying(40) NOT NULL,
+    "文獻節點檔主鍵" character varying(40) NOT NULL,
     "切塊內容"     character varying,
     "內容向量"     vector(1024),
     "切塊索引"     integer NOT NULL,

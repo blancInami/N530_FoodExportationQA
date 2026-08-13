@@ -46,7 +46,7 @@ COMMENT ON COLUMN public."知識文獻節點檔"."節點標題路徑" IS '完整
 -- 節點內容的向量化切塊，由離線工具 tools/ingest_agent.py 自動管理
 CREATE TABLE IF NOT EXISTS public."知識文獻切塊檔" (
     "主鍵"           uuid    PRIMARY KEY DEFAULT gen_random_uuid(),
-    "知識文獻節點檔主鍵" varchar(40) NOT NULL,
+    "文獻節點檔主鍵" varchar(40) NOT NULL,
     "切塊內容"       text,
     "內容向量"       vector(1024),
     "切塊索引"       integer NOT NULL,
@@ -61,7 +61,7 @@ CREATE INDEX IF NOT EXISTS idx_知識文獻節點檔_主檔
     ON public."知識文獻節點檔" ("文獻主檔主鍵");
 
 CREATE INDEX IF NOT EXISTS idx_知識文獻切塊檔_節點
-    ON public."知識文獻切塊檔" ("知識文獻節點檔主鍵");
+    ON public."知識文獻切塊檔" ("文獻節點檔主鍵");
 
 CREATE INDEX IF NOT EXISTS idx_知識文獻切塊檔_向量
     ON public."知識文獻切塊檔"

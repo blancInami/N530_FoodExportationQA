@@ -1,4 +1,4 @@
-﻿"""
+"""
 SQLAlchemy 2.0 Core table definitions for all 10 database tables.
 Uses Table() + MetaData — NOT ORM DeclarativeBase.
 
@@ -190,7 +190,7 @@ metadata = MetaData()
     Column("主鍵",
            UUID(as_uuid=True).with_variant(mssql.UNIQUEIDENTIFIER(), "mssql"),
            primary_key=True, default=uuid.uuid4),
-    Column("知識文獻節點檔主鍵", String(40), nullable=False),
+    Column("文獻節點檔主鍵", String(40), nullable=False),
     Column("切塊內容", String),
     Column("內容向量",
            Vector(1024).with_variant(MssqlVector(1024), "mssql")),
@@ -210,23 +210,23 @@ metadata = MetaData()
     Column("查詢時間", DateTime, nullable=False, server_default=func.now()),
     Column("原始問題", Text, nullable=False),
     Column("是否中文",
-           Boolean.with_variant(mssql.BIT(), "mssql"),
+           Boolean().with_variant(mssql.BIT(), "mssql"),
            nullable=False),
     Column("中文譯文", Text),
     Column("意圖分類方式", String(20)),         # 'aho-corasick' | 'llm_fallback' | 'none'
     Column("負責機關", String(200)),
     Column("負責單位", String(200)),
     Column("命中術語",
-           JSONB.with_variant(mssql.JSON(), "mssql")),   # {中文: 英文, ...}
+           JSONB().with_variant(mssql.JSON(), "mssql")),   # {中文: 英文, ...}
     Column("enriched_query", Text),
     Column("similarity_threshold", Float),
     Column("top_n", Integer),
     Column("問卷命中數", Integer),
     Column("知識命中數", Integer),
     Column("參考來源",
-           JSONB.with_variant(mssql.JSON(), "mssql")),
+           JSONB().with_variant(mssql.JSON(), "mssql")),
     Column("知識參考來源",
-           JSONB.with_variant(mssql.JSON(), "mssql")),
+           JSONB().with_variant(mssql.JSON(), "mssql")),
     Column("raw_context", Text),
     Column("knowledge_context", Text),
     Column("dictionary_xml", Text),

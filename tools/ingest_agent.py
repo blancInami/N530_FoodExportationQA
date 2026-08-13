@@ -303,12 +303,12 @@ def ingest_to_db(
     # Build dialect-specific chunk INSERT SQL
     if _is_mssql:
         chunk_insert_sql = (
-            f'INSERT INTO {schema}."知識文獻切塊檔" ("主鍵", "知識文獻節點檔主鍵", "切塊內容", "內容向量", "切塊索引", "詞元數量") '
+            f'INSERT INTO {schema}."知識文獻切塊檔" ("主鍵", "文獻節點檔主鍵", "切塊內容", "內容向量", "切塊索引", "詞元數量") '
             'VALUES (?, ?, ?, CAST(? AS VECTOR(1024)), ?, ?)'
         )
     else:
         chunk_insert_sql = (
-            f'INSERT INTO {schema}."知識文獻切塊檔" ("主鍵", "知識文獻節點檔主鍵", "切塊內容", "內容向量", "切塊索引", "詞元數量") '
+            f'INSERT INTO {schema}."知識文獻切塊檔" ("主鍵", "文獻節點檔主鍵", "切塊內容", "內容向量", "切塊索引", "詞元數量") '
             'VALUES (%s, %s, %s, %s::vector, %s, %s)'
         )
 
@@ -350,7 +350,18 @@ def ingest_to_db(
                 if not chunks:
                     continue
 
-                sanitized = [sanitize_text(c) for c in chunks]
+                header_path = sanitize_text(node["header_path"])
+                # 避免 LLM 幻覺產出超長 header_path 導致 Embedding 413 錯誤
+                if len(header_path) > 300:
+                    header_path = header_path[:300] + "..."
+
+                sanitized = []
+                for c in chunks:
+                    clean_text = sanitize_text(c)
+                    if header_path and header_path not in clean_text:
+                        clean_text = f"[{header_path}]\n{clean_text}"
+                    sanitized.append(clean_text)
+
                 texts_for_embed = [t if t else "empty" for t in sanitized]
                 logger.info("向量化節點：節點主鍵=%s  切塊數=%d", node_pk, len(texts_for_embed))
                 vectors = get_embeddings_batch(texts_for_embed)
