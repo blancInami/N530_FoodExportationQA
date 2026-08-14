@@ -217,6 +217,65 @@ def _validate_extracted_questions(data: object) -> list[dict]:
     return validated
 
 
+def _normalize_single_question_id(raw_id: str) -> str:
+    """單題號基礎標點與符號清洗。"""
+    qid = str(raw_id).strip()
+    # 1. 將 Part_A, Part_1, Chapter_II 等底線轉為標準空格
+    qid = re.sub(r"\b(Part|Chapter|Section|Annex|Appendix)_([A-Za-z0-9IVXLCDM]+)\b", r"\1 \2", qid, flags=re.IGNORECASE)
+    # 2. 清除底線為點號或空格（若非標準關鍵字）
+    qid = re.sub(r"_+", ".", qid)
+    # 3. 合併多餘連續點號，例如 Part C..1 -> Part C.1
+    qid = re.sub(r"\.+", ".", qid)
+    # 4. 去除點號兩側多餘空格，例如 "Part C . 1" -> "Part C.1"
+    qid = re.sub(r"\s*\.\s*", ".", qid)
+    # 5. 去除首尾多餘點號或空格（但保留內部格式）
+    qid = qid.strip(". ").strip()
+    # 6. 修復 "Part A. 1" 或 "Part A 1" 模式為 "Part A.1"
+    qid = re.sub(r"\b(Part\s+[A-Za-z0-9IVXLCDM]+)\s+(\d+)\b", r"\1.\2", qid, flags=re.IGNORECASE)
+    return qid
+
+
+def _canonicalize_all_question_ids(items: list[dict]) -> list[dict]:
+    """
+    全篇題號統一性清洗與前綴對齊：
+    1. 執行基礎單題號清洗。
+    2. 統計全篇主流前綴模式（例如若檢測到多個 'Part A', 'Part B' 等）：
+       - 若後續出現單獨字母開頭（如 'D.1.a', 'E.1'），自動補齊為 'Part D.1.a'。
+    3. 執行去重與格式保證。
+    """
+    if not items:
+        return []
+
+    # 第一階段：單項基礎清洗
+    cleaned_items: list[dict] = []
+    part_letter_seen: set[str] = set()
+
+    for item in items:
+        raw_id = item.get("question_id", "")
+        raw_text = item.get("question_text", "")
+        norm_id = _normalize_single_question_id(raw_id)
+        if norm_id and raw_text:
+            cleaned_items.append({"question_id": norm_id, "question_text": raw_text})
+            # 檢查是否有 "Part X" 模式
+            m = re.match(r"^Part\s+([A-Z])(?:\.|$)", norm_id, re.IGNORECASE)
+            if m:
+                part_letter_seen.add(m.group(1).upper())
+
+    # 第二階段：若文檔主流存在 Part A/B/C... 模式，對齊遺漏了 "Part " 前綴的單字母題號
+    if len(part_letter_seen) >= 2:
+        for item in cleaned_items:
+            qid = item["question_id"]
+            # 匹配如 "D.1.a", "E.2" 等孤立大寫字母開頭且無 Part 前綴
+            m_bare = re.match(r"^([A-Z])(\.\d+.*)$", qid)
+            if m_bare:
+                letter = m_bare.group(1).upper()
+                rest = m_bare.group(2)
+                # 補齊為 "Part D.1.a"
+                item["question_id"] = f"Part {letter}{rest}"
+
+    return _deduplicate_items(cleaned_items)
+
+
 def _deduplicate_items(items: list[dict]) -> list[dict]:
     seen: dict[str, dict] = {}
     result: list[dict] = []
@@ -646,7 +705,7 @@ def advance_page_node(state: QuestionnaireState) -> QuestionnaireState:
 
 
 async def final_reducer_node(state: QuestionnaireState) -> QuestionnaireState:
-    """Node 5: 全局統整與去重節點。"""
+    """Node 5: 全局統整、跨頁去重與題號統一規範化節點。"""
     history = state.get("page_history", {})
     all_extracted: list[dict] = []
     for p in sorted(history.keys()):
@@ -654,8 +713,8 @@ async def final_reducer_node(state: QuestionnaireState) -> QuestionnaireState:
 
     logger.info("[LangGraph Reducer] 匯總各頁題目，初始總筆數=%d 筆...", len(all_extracted))
     before_count = len(all_extracted)
-    deduped = _deduplicate_items(all_extracted)
-    logger.info("[LangGraph Reducer] 跨頁去重完成：%d 筆 -> %d 筆", before_count, len(deduped))
+    deduped = _canonicalize_all_question_ids(all_extracted)
+    logger.info("[LangGraph Reducer] 跨頁去重與題號規範化完成：%d 筆 -> %d 筆", before_count, len(deduped))
 
     # 全局 LLM 審查與清洗
     if deduped and len(deduped) <= 150:
@@ -678,7 +737,9 @@ async def final_reducer_node(state: QuestionnaireState) -> QuestionnaireState:
             logger.warning("[LangGraph Reducer跳過] 全局審查失敗：%s", e)
         logger.info("[LangGraph Reducer耗時] %.1f ms", (time.perf_counter() - t0) * 1000)
 
-    return {"final_questions": deduped}
+    # 最終輸出再做一次題號格式規範化保障
+    final_canonical = _canonicalize_all_question_ids(deduped)
+    return {"final_questions": final_canonical}
 
 
 # ═══════════════════════════════════════════════════════════════════════════

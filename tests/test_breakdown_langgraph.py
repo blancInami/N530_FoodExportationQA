@@ -9,6 +9,8 @@ from app.services.breakdown_langgraph import (
     _clean_json,
     _validate_extracted_questions,
     _deduplicate_items,
+    _normalize_single_question_id,
+    _canonicalize_all_question_ids,
     _calculate_toc_anchors,
     _get_active_anchor,
     _calibrate_toc_anchors,
@@ -42,6 +44,30 @@ class LangGraphHelperTests(unittest.TestCase):
         self.assertEqual(len(res), 2)
         self.assertIn("First page text.", res[0]["question_text"])
         self.assertIn("Second page text.", res[0]["question_text"])
+
+    def test_normalize_single_question_id(self):
+        """測試單題號去除底線、多餘點號與格式統一。"""
+        self.assertEqual(_normalize_single_question_id("Part_C..1.a"), "Part C.1.a")
+        self.assertEqual(_normalize_single_question_id("Part_A. 1.a"), "Part A.1.a")
+        self.assertEqual(_normalize_single_question_id("Chapter_II.2.1"), "Chapter II.2.1")
+        self.assertEqual(_normalize_single_question_id("Part_C."), "Part C")
+        self.assertEqual(_normalize_single_question_id("1.1."), "1.1")
+
+    def test_canonicalize_all_question_ids_prefix_alignment(self):
+        """測試整篇問卷前綴自動對齊：Part A, Part B, Part C -> D.1.a 自動補齊為 Part D.1.a。"""
+        raw_items = [
+            {"question_id": "Part_A.1.a", "question_text": "Q1"},
+            {"question_id": "Part_B.1.a", "question_text": "Q2"},
+            {"question_id": "Part_C..1.a", "question_text": "Q3"},
+            {"question_id": "D.1.a", "question_text": "Q4"},
+            {"question_id": "E.1.a", "question_text": "Q5"},
+        ]
+        canonical = _canonicalize_all_question_ids(raw_items)
+        self.assertEqual(canonical[0]["question_id"], "Part A.1.a")
+        self.assertEqual(canonical[1]["question_id"], "Part B.1.a")
+        self.assertEqual(canonical[2]["question_id"], "Part C.1.a")
+        self.assertEqual(canonical[3]["question_id"], "Part D.1.a")
+        self.assertEqual(canonical[4]["question_id"], "Part E.1.a")
 
     def test_calculate_toc_anchors(self):
         """測試目錄章節起始頁與結束頁區間計算。"""
@@ -216,10 +242,10 @@ class LangGraphPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
         result = await extract_questions_langgraph(fake_docx_bytes, "sample.docx")
 
         self.assertEqual(len(result), 4)
-        self.assertEqual(result[0]["question_id"], "Chapter_I.1")
-        self.assertEqual(result[1]["question_id"], "Chapter_I.2")
-        self.assertEqual(result[2]["question_id"], "Chapter_II.1")
-        self.assertEqual(result[3]["question_id"], "Chapter_II.2")
+        self.assertEqual(result[0]["question_id"], "Chapter I.1")
+        self.assertEqual(result[1]["question_id"], "Chapter I.2")
+        self.assertEqual(result[2]["question_id"], "Chapter II.1")
+        self.assertEqual(result[3]["question_id"], "Chapter II.2")
 
 
 if __name__ == "__main__":

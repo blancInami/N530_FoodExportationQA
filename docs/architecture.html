@@ -622,7 +622,7 @@ _matcher = <span class="fn">DictionaryMatcher</span>()               <span class
         <li><strong>Node 2 (Page Analyzer & 動態校準)：</strong>逐頁研讀時，一旦畫面出現新章節大標題（<code>detected_new_chapter</code>），即時將該章節的真實物理起始頁錨定為當前頁面，自動閉合上一章並刷新工作記憶；若遇斷層可指定任意目標頁（如 <code>[3, 7]</code>）請求回讀。</li>
         <li><strong>Node 3 (Router)：</strong>智慧路由分支與防死鎖防禦（單頁回讀上限 1 次，最多打包 3 頁影像）。</li>
         <li><strong>Node 4 (Arbitrary Back-read)：</strong>調取動態校準後的真實物理起始頁、前頁與當前頁多影像進行跨度對照還原。</li>
-        <li><strong>Node 5 (Reducer)：</strong>通讀全篇後由 LLM 執行跨頁去重、格式規範化與偽題目二次過濾。</li>
+        <li><strong>Node 5 (Reducer & 題號規範化)：</strong>通讀全篇後自動執行全篇題號統一清洗（去除底線、點號合併、自動對齊 Part 前綴），並由 LLM 執行跨頁去重與偽題目二次過濾。</li>
       </ul>
     </div>
 
