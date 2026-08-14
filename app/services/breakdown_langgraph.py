@@ -1,14 +1,16 @@
 """
-Breakdown LangGraph: 模擬人類循序閱讀、目錄區間錨定與任意指定頁記憶回讀問卷解析服務。
+Breakdown LangGraph: 模擬人類循序閱讀、動態章節校準、目錄區間錨定與任意指定頁記憶回讀問卷解析服務。
 
-核心架構特性（Human-like Reading Flow 2.0）：
-  1. TOC Page-Range Anchors (Node 1: TOC Extractor):
-     分析前置頁，計算各章節的【精確頁碼區間】（如 Chapter II: Pages 3~12），在狀態中建立章節導航地圖。
-  2. Heading Stack & Working Memory (Node 2: Page Analyzer):
-     維護當前活躍層級標題棧 (heading_stack)，傳遞至每一頁；若遇題號斷裂或需確認父級，
-     LLM 可在 JSON 輸出中指定任意欲回溯的頁碼列表 (如 back_read_pages: [3, 7])。
-  3. Multi-image Arbitrary Back-Reading (Node 4: Back-Read Inspector):
-     打破只能翻上一頁的限制，動態調取【根章節定義頁 + 上一頁 + 當前頁】等多張指定影像進行對照還原。
+核心架構特性（Human-like Reading Flow 2.1）：
+  1. TOC Expectation (Node 1: TOC Extractor):
+     分析前置頁，梳理出整份問卷的章節大綱樹（預期章節名稱與相對順序）。
+  2. Dynamic Page Calibration & Working Memory (Node 2: Page Analyzer):
+     逐頁研讀時，一旦畫面出現【新章節大標題/關鍵轉折點】（detected_new_chapter），
+     立即動態將該章節的真實物理起始頁錨定為當前頁面 (start_page = current_page)，
+     前一章節 end_page 自動閉合為 (current_page - 1)，並刷新 active_chapter 與 heading_stack。
+  3. Ground-Truth Arbitrary Back-Reading (Node 4: Back-Read Inspector):
+     打破目錄自訂頁碼與物理頁碼偏差問題，當後續頁面需要回讀章節定義時，
+     直接調取動態校準後的【真實物理關鍵起始頁 + 當前頁】影像對照還原。
   4. Safety Loop & Budget Guard (Node 3: Router):
      單頁最多回讀 1 次，限制回讀最多打包 3 頁影像，記錄翻頁軌跡並防止無限回讀死鎖。
   5. Final Reducer (Node 5):
@@ -38,11 +40,11 @@ logger = logging.getLogger(__name__)
 
 LANGGRAPH_TOC_SYSTEM_PROMPT = """\
 你是一個精準的文件大綱結構分析專家。
-你的任務是分析輸入的問卷前置頁面（通常包含目錄或主要章節），梳理整份問卷的「章節大綱樹（TOC Structure）」與各章節的頁碼分佈。
+你的任務是分析輸入的問卷前置頁面（通常包含目錄或主要章節），梳理整份問卷的「章節大綱樹（TOC Structure）」與預期順序。
 
 【執行規則】
 1. 提取所有主章節（如 Part A, Chapter I, 1. General, 2.2 Standards 等）。
-2. 為每個章節標註標準編號（如 "I", "II", "Part_A", "1"）與起始頁碼 (1-based)。
+2. 為每個章節標註標準編號（如 "I", "II", "Part_A", "1"）與標題。
 
 【輸出約束】
 - 輸出合法的 JSON Array of Objects：
@@ -60,27 +62,36 @@ LANGGRAPH_PAGE_ANALYZER_SYSTEM_PROMPT = """\
 你是一個模擬人類專家循序審閱問卷的視覺多模態解析器（Human-like Page Inspector）。
 你正在逐頁閱讀問卷影像。你擁有目錄導航視野（TOC Anchors）與層級標題棧（Heading Stack）。
 
-【職責 1：前文未完結碎片縫合 (Pending Context Stitching)】
+【職責 1：章節轉折與關鍵頁面偵測 (Key Chapter Transition & Memory Calibration)】
+- 當你在本頁頂部或中段發現【新的主章節/大標題】開始（例如 "Chapter II. Animal Health", "Part B. Processing Standards" 等）：
+  請在 "detected_new_chapter" 填入該章節資訊，系統將立即把本頁錨定為該章節的真實物理起始頁，以校準工作記憶！
+- 若本頁只是延續既有章節，請將 "detected_new_chapter" 設為 null。
+
+【職責 2：前文未完結碎片縫合 (Pending Context Stitching)】
 - 若提供了 <Pending_Context>，代表上一頁底部有一道被頁面切斷、尚未完結的題目。
 - 請優先將本頁頂部的內容與 <Pending_Context> 拼接為完整題目！
 
-【職責 2：實質問卷題目萃取】
+【職責 3：實質問卷題目萃取】
 - 僅萃取「需要受查國填答/說明」之實質題目（回答 Yes/No、提供數據、說明制度）。
 - 嚴格剔除非題目雜訊：表格欄位標題（"No.", "Question", "Answer"）、填寫說明、法規純引文、純章節大標題。
 - 題號必須扁平化展開（如 "II.1.a.i"），完整繼承章節與父題號。
 
-【職責 3：主動請求任意頁回讀 (Arbitrary Page Back-reading)】
+【職責 4：主動請求任意頁回讀 (Arbitrary Page Back-reading)】
 - 若發現本頁頂部題目出現異常跳號（例如本頁開頭是 "(d)" 或 "2.3"，但缺乏父級定義），
   且你從 <TOC_Navigation_Context> 或記憶中知道其根章節落在第 X 頁（例如第 3 頁）：
   請將 "request_back_read" 設為 true，並在 "back_read_pages" 指定欲翻閱的頁碼列表（例如 [3] 或 [3, 7]）。
 - 若本頁可正常完整解析，請將 "request_back_read" 設為 false，"back_read_pages" 設為 []。
 
-【職責 4：本頁未完結碎片暫存】
+【職責 5：本頁未完結碎片暫存】
 - 若本頁最底部的題目在頁尾被截斷（例如只有前半句題幹或表格列未完），請將該碎片寫入 "pending_context" 欄位，交由下一頁縫合。
 
 【輸出約束】
 - 輸出合法的 JSON Object：
   {
+    "detected_new_chapter": {
+      "id": "新章節標準編號 (如 Chapter_II, Part_B)",
+      "title": "新章節標題"
+    } 或 null,
     "extracted_questions": [
       {
         "question_id": "完整扁平化題號 (字串，如 1.1 或 II.1.a)",
@@ -104,6 +115,7 @@ LANGGRAPH_BACK_READ_SYSTEM_PROMPT = """\
 【輸出約束】
 - 輸出合法的 JSON Object（同 Page Analyzer 格式）：
   {
+    "detected_new_chapter": null,
     "extracted_questions": [
       {
         "question_id": "完整扁平化題號 (字串)",
@@ -141,10 +153,12 @@ class TocAnchor(TypedDict, total=False):
     title: str
     start_page: int
     end_page: int
+    is_calibrated: bool  # 是否已經在物理頁面研讀中動態校準確認
 
 
 class PageAnalysisResult(TypedDict, total=False):
     page_number: int
+    detected_new_chapter: dict | None
     extracted_questions: list[dict]
     pending_context: str
     active_chapter: str
@@ -169,6 +183,7 @@ class QuestionnaireState(TypedDict, total=False):
 
     # 累積結果與 Checkpoint 快照
     page_history: dict[int, PageAnalysisResult]
+    chapter_milestones: list[str]
     final_questions: list[dict]
 
     # 回讀與循環防護
@@ -180,7 +195,7 @@ class QuestionnaireState(TypedDict, total=False):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  輔助函式 (JSON 清洗、驗證、TOC 區間計算)
+#  輔助函式 (JSON 清洗、驗證、TOC 區間計算與動態校準)
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _clean_json(raw: str) -> str:
@@ -221,7 +236,7 @@ def _deduplicate_items(items: list[dict]) -> list[dict]:
 
 
 def _calculate_toc_anchors(toc: list[dict], total_pages: int) -> list[TocAnchor]:
-    """根據 TOC 列表計算每個章節的起始與結束頁區間。"""
+    """根據 TOC 列表計算初始預估的章節區間。"""
     if not toc:
         return []
 
@@ -251,6 +266,7 @@ def _calculate_toc_anchors(toc: list[dict], total_pages: int) -> list[TocAnchor]
             "title": curr["title"],
             "start_page": start_p,
             "end_page": end_p,
+            "is_calibrated": False,
         })
     return anchors
 
@@ -263,12 +279,80 @@ def _get_active_anchor(anchors: list[TocAnchor], page_no: int) -> TocAnchor | No
     return anchors[0] if anchors else None
 
 
+def _calibrate_toc_anchors(
+    anchors: list[TocAnchor],
+    current_page: int,
+    detected_chapter: dict,
+    total_pages: int,
+) -> tuple[list[TocAnchor], bool, str]:
+    """
+    當在物理頁面 current_page 發現新章節時，即時動態校準 TOC 錨點區間。
+    回傳 (校準後 anchors, 是否發生校準, 紀錄文字)。
+    """
+    if not detected_chapter or not isinstance(detected_chapter, dict):
+        return anchors, False, ""
+
+    new_id = str(detected_chapter.get("id", "")).strip()
+    new_title = str(detected_chapter.get("title", "")).strip()
+    if not new_id:
+        return anchors, False, ""
+
+    new_anchors = [dict(a) for a in anchors]
+    matched_idx = -1
+
+    # 尋找是否在既有 TOC 預期列表中（比對 ID 或 title 包含關係）
+    for i, a in enumerate(new_anchors):
+        if a["id"].lower() == new_id.lower() or (new_title and new_title.lower() in a.get("title", "").lower()):
+            matched_idx = i
+            break
+
+    milestone_msg = ""
+    if matched_idx >= 0:
+        # 已有預期章節：校準其 start_page
+        old_start = new_anchors[matched_idx]["start_page"]
+        new_anchors[matched_idx]["start_page"] = current_page
+        new_anchors[matched_idx]["is_calibrated"] = True
+        if new_title and not new_anchors[matched_idx].get("title"):
+            new_anchors[matched_idx]["title"] = new_title
+
+        # 前一章節的 end_page 閉合至 current_page - 1
+        if matched_idx > 0:
+            new_anchors[matched_idx - 1]["end_page"] = max(new_anchors[matched_idx - 1]["start_page"], current_page - 1)
+
+        milestone_msg = f"Chapter '{new_id}' calibrated from p.{old_start} -> real physical p.{current_page}"
+        logger.info("[TOC動態校準] %s", milestone_msg)
+    else:
+        # 新增未在目錄出現的突發章節
+        # 先閉合前一個錨點
+        if new_anchors:
+            new_anchors[-1]["end_page"] = max(new_anchors[-1]["start_page"], current_page - 1)
+        new_anchor: TocAnchor = {
+            "id": new_id,
+            "title": new_title,
+            "start_page": current_page,
+            "end_page": total_pages,
+            "is_calibrated": True,
+        }
+        new_anchors.append(new_anchor)
+        milestone_msg = f"Discovered new chapter '{new_id}' anchored at real physical p.{current_page}"
+        logger.info("[TOC動態發現] %s", milestone_msg)
+
+    # 確保所有 anchors 頁碼單調遞增
+    new_anchors.sort(key=lambda x: x["start_page"])
+    for i in range(len(new_anchors) - 1):
+        new_anchors[i]["end_page"] = max(new_anchors[i]["start_page"], new_anchors[i + 1]["start_page"] - 1)
+    if new_anchors:
+        new_anchors[-1]["end_page"] = total_pages
+
+    return new_anchors, True, milestone_msg
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  LangGraph 節點實作 (Nodes)
 # ═══════════════════════════════════════════════════════════════════════════
 
 async def toc_extractor_node(state: QuestionnaireState) -> QuestionnaireState:
-    """Node 1: 目錄大綱與頁碼區間錨定節點。"""
+    """Node 1: 目錄大綱與初始預估錨定節點。"""
     pages = state["image_pages"]
     total = len(pages)
     if total <= 1:
@@ -280,6 +364,7 @@ async def toc_extractor_node(state: QuestionnaireState) -> QuestionnaireState:
             "heading_stack": [],
             "pending_context": "",
             "page_history": {},
+            "chapter_milestones": [],
             "final_questions": [],
             "loop_count": 0,
             "back_read_trail": [],
@@ -310,7 +395,7 @@ async def toc_extractor_node(state: QuestionnaireState) -> QuestionnaireState:
 
     anchors = _calculate_toc_anchors(toc, total)
     initial_chap = anchors[0]["id"] if anchors else ""
-    logger.info("[LangGraph TOC完成] 成功建立目錄大綱，共 %d 個章節錨點區間", len(anchors))
+    logger.info("[LangGraph TOC完成] 成功建立目錄大綱，共 %d 個初始章節錨點", len(anchors))
 
     return {
         "toc_structure": toc,
@@ -320,6 +405,7 @@ async def toc_extractor_node(state: QuestionnaireState) -> QuestionnaireState:
         "heading_stack": [initial_chap] if initial_chap else [],
         "pending_context": "",
         "page_history": {},
+        "chapter_milestones": [],
         "final_questions": [],
         "loop_count": 0,
         "is_back_reading": False,
@@ -329,7 +415,7 @@ async def toc_extractor_node(state: QuestionnaireState) -> QuestionnaireState:
 
 
 async def page_analyzer_node(state: QuestionnaireState) -> QuestionnaireState:
-    """Node 2: 單頁循序研讀與導航節點（注入 TOC 區間與 Heading Stack 工作記憶）。"""
+    """Node 2: 單頁循序研讀、關鍵章節動態校準與工作記憶維護節點。"""
     idx = state["current_index"]
     page_no = idx + 1
     total = state["total_pages"]
@@ -339,9 +425,10 @@ async def page_analyzer_node(state: QuestionnaireState) -> QuestionnaireState:
     active_anchor = _get_active_anchor(anchors, page_no)
     active_chap = active_anchor["id"] if active_anchor else state.get("active_chapter", "")
     heading_stack = state.get("heading_stack", [])
+    milestones = list(state.get("chapter_milestones", []))
 
     logger.info(
-        "[LangGraph Page] 研讀第 %d/%d 頁  所屬章節=%s (區間 %d~%d 頁)  前文碎片=%s",
+        "[LangGraph Page] 研讀第 %d/%d 頁  所屬章節=%s (校準區間 %d~%d 頁)  前文碎片=%s",
         page_no, total, active_chap or "(無)",
         active_anchor["start_page"] if active_anchor else 1,
         active_anchor["end_page"] if active_anchor else total,
@@ -355,10 +442,11 @@ async def page_analyzer_node(state: QuestionnaireState) -> QuestionnaireState:
     if active_anchor:
         prompt_parts.append(
             "<TOC_Navigation_Context>\n"
-            f"當前頁碼：第 {page_no} 頁\n"
-            f"所屬章節：{active_anchor['id']} - {active_anchor['title']}（該章節定義始於第 {active_anchor['start_page']} 頁）\n"
-            f"可用章節錨點：{json.dumps(anchors, ensure_ascii=False)}\n"
-            "【提示】若本頁子項丟失父級定義，可指定 back_read_pages 回讀章節起始頁！\n"
+            f"當前物理頁碼：第 {page_no} 頁\n"
+            f"當前工作章節：{active_anchor['id']} - {active_anchor.get('title', '')}（該章節真實物理起始頁：第 {active_anchor['start_page']} 頁）\n"
+            f"所有章節物理錨點地圖：{json.dumps(anchors, ensure_ascii=False)}\n"
+            "【提示 1】若本頁頂部/中段出現了新章節大標題，請填寫 detected_new_chapter 進行動態校準！\n"
+            "【提示 2】若本頁題目丟失父級定義，可指定 back_read_pages 回讀真實起始頁！\n"
             "</TOC_Navigation_Context>"
         )
     if heading_stack:
@@ -376,7 +464,6 @@ async def page_analyzer_node(state: QuestionnaireState) -> QuestionnaireState:
             temperature=0,
             max_tokens=4096,
         )
-        elapsed = (time.perf_counter() - t0) * 1000
         cleaned = _clean_json(raw_output)
         res = json.loads(cleaned)
         if not isinstance(res, dict):
@@ -387,12 +474,29 @@ async def page_analyzer_node(state: QuestionnaireState) -> QuestionnaireState:
 
     extracted = _validate_extracted_questions(res.get("extracted_questions", []))
     new_pending = str(res.get("pending_context", "")).strip()
-    new_active_chap = str(res.get("active_chapter", active_chap)).strip() or active_chap
+    detected_chap = res.get("detected_new_chapter")
     curr_heading = str(res.get("current_heading", "")).strip()
     request_back_read = bool(res.get("request_back_read", False))
     raw_back_pages = res.get("back_read_pages", [])
 
-    # 規範化回讀頁碼列表（過濾合法頁碼，排除當前頁與超出範圍頁）
+    # 1. 執行關鍵頁面章節動態校準
+    calibrated_anchors = anchors
+    if detected_chap and isinstance(detected_chap, dict) and detected_chap.get("id"):
+        calibrated_anchors, is_calibrated, m_msg = _calibrate_toc_anchors(
+            anchors=anchors,
+            current_page=page_no,
+            detected_chapter=detected_chap,
+            total_pages=total,
+        )
+        if is_calibrated and m_msg:
+            milestones.append(m_msg)
+            # 重置 active_chapter 與標題棧
+            active_chap = str(detected_chap["id"]).strip()
+            heading_stack = [active_chap]
+
+    new_active_chap = str(res.get("active_chapter", active_chap)).strip() or active_chap
+
+    # 2. 規範化回讀頁碼列表（過濾合法頁碼，排除當前頁與超出範圍頁）
     back_read_pages: list[int] = []
     if isinstance(raw_back_pages, list):
         for p in raw_back_pages:
@@ -406,7 +510,7 @@ async def page_analyzer_node(state: QuestionnaireState) -> QuestionnaireState:
     if request_back_read and not back_read_pages and page_no > 1:
         back_read_pages = [page_no - 1]
 
-    # 更新標題棧
+    # 3. 更新標題棧
     new_stack = list(heading_stack)
     if new_active_chap and (not new_stack or new_stack[0] != new_active_chap):
         new_stack = [new_active_chap]
@@ -421,6 +525,7 @@ async def page_analyzer_node(state: QuestionnaireState) -> QuestionnaireState:
     history = dict(state.get("page_history", {}))
     history[page_no] = PageAnalysisResult(
         page_number=page_no,
+        detected_new_chapter=detected_chap if isinstance(detected_chap, dict) else None,
         extracted_questions=extracted,
         pending_context=new_pending,
         active_chapter=new_active_chap,
@@ -430,10 +535,12 @@ async def page_analyzer_node(state: QuestionnaireState) -> QuestionnaireState:
     )
 
     return {
+        "toc_anchors": calibrated_anchors,
         "pending_context": new_pending,
         "active_chapter": new_active_chap,
         "heading_stack": new_stack,
         "page_history": history,
+        "chapter_milestones": milestones,
         "requested_back_read_pages": back_read_pages,
         "is_back_reading": request_back_read and bool(back_read_pages),
         "loop_count": state.get("loop_count", 0) + 1,
@@ -441,7 +548,7 @@ async def page_analyzer_node(state: QuestionnaireState) -> QuestionnaireState:
 
 
 async def back_read_inspector_node(state: QuestionnaireState) -> QuestionnaireState:
-    """Node 4: 支援任意指定多頁的記憶回讀審查節點。"""
+    """Node 4: 支援任意指定多頁的記憶回讀審查節點（對照校準後的真實物理起始頁）。"""
     idx = state["current_index"]
     page_no = idx + 1
     total = state["total_pages"]
@@ -451,11 +558,10 @@ async def back_read_inspector_node(state: QuestionnaireState) -> QuestionnaireSt
 
     # 限制最多打包 3 張關聯頁（排序去重）
     target_pages = sorted(list(set(target_pages)))[-2:]
-    trail_msg = f"Page {page_no} -> Back-read to pages {target_pages}"
-    logger.info("[LangGraph Back-Read] 啟動多頁跨度記憶回讀：調取頁面 %s 與當前第 %d 頁影像進行對照...", target_pages, page_no)
+    trail_msg = f"Page {page_no} -> Back-read to real calibrated pages {target_pages}"
+    logger.info("[LangGraph Back-Read] 啟動多頁跨度記憶回讀：調取真實物理頁面 %s 與當前第 %d 頁影像進行對照...", target_pages, page_no)
     t0 = time.perf_counter()
 
-    # 打包影像：指定的前置頁 + 當前頁
     images_to_send: list[dict[str, str]] = []
     history = state.get("page_history", {})
     history_summary = []
@@ -472,11 +578,10 @@ async def back_read_inspector_node(state: QuestionnaireState) -> QuestionnaireSt
                 "extracted_sample": p_rec.get("extracted_questions", [])[:3],
             })
 
-    # 加入當前頁影像
     images_to_send.append(state["image_pages"][idx])
 
     prompt = (
-        f"這是問卷關聯頁面 {target_pages} 與當前第 {page_no} 頁的連續對照影像。\n"
+        f"這是問卷關聯真實物理頁面 {target_pages} 與當前第 {page_no} 頁的連續對照影像。\n"
         f"關聯頁面歷史快照：{json.dumps(history_summary, ensure_ascii=False)}\n"
         f"請對照前置頁的章節標題與父級編號，精確還原第 {page_no} 頁的所有正確題號與題目內容。\n"
     )
@@ -500,10 +605,10 @@ async def back_read_inspector_node(state: QuestionnaireState) -> QuestionnaireSt
     extracted = _validate_extracted_questions(res.get("extracted_questions", []))
     new_pending = str(res.get("pending_context", "")).strip()
 
-    # 更新當前頁歷史快照
     hist_copy = dict(history)
     hist_copy[page_no] = PageAnalysisResult(
         page_number=page_no,
+        detected_new_chapter=None,
         extracted_questions=extracted,
         pending_context=new_pending,
         active_chapter=state.get("active_chapter", ""),
@@ -609,7 +714,7 @@ def page_routing_decision(state: QuestionnaireState) -> str:
 # ═══════════════════════════════════════════════════════════════════════════
 
 def build_questionnaire_graph() -> Any:
-    """建構支援目錄區間錨定與任意頁回讀的 LangGraph 狀態機。"""
+    """建構支援目錄動態校準與任意頁回讀的 LangGraph 狀態機。"""
     workflow = StateGraph(QuestionnaireState)
 
     # 註冊節點
@@ -657,7 +762,7 @@ def build_questionnaire_graph() -> Any:
 
 async def extract_questions_langgraph(file_bytes: bytes, filename: str) -> list[dict]:
     """
-    使用 LangGraph 擬人化循序閱讀、目錄區間錨定與任意頁記憶回讀狀態機解析問卷。
+    使用 LangGraph 擬人化循序閱讀、關鍵頁動態校準與任意頁記憶回讀狀態機解析問卷。
     """
     pipeline_start = time.perf_counter()
     mime = "application/pdf" if filename.lower().endswith(".pdf") else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -688,6 +793,7 @@ async def extract_questions_langgraph(file_bytes: bytes, filename: str) -> list[
         "heading_stack": [],
         "pending_context": "",
         "page_history": {},
+        "chapter_milestones": [],
         "final_questions": [],
         "requested_back_read_pages": [],
         "is_back_reading": False,
@@ -704,6 +810,9 @@ async def extract_questions_langgraph(file_bytes: bytes, filename: str) -> list[
     results = final_output.get("final_questions", [])
 
     total_ms = (time.perf_counter() - pipeline_start) * 1000
+    milestones = final_output.get("chapter_milestones", [])
+    if milestones:
+        logger.info("[LangGraph 關鍵章節校準里程碑] %s", " | ".join(milestones))
     trail = final_output.get("back_read_trail", [])
     if trail:
         logger.info("[LangGraph 回讀翻閱軌跡] %s", " | ".join(trail))

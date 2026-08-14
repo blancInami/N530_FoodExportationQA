@@ -4,6 +4,12 @@ applyTo: "**"
 
 # N530_FoodExportationQA — AI Agent 開發規範
 
+## 🔴 安全與操作準則（重要）
+- **實作完成後無論如何均不允許自行推送（git push）至 GitLab、GitHub 或任何遠端倉庫。**
+- 所有的 `git push` 必須由使用者明確主動發出推送指令時才可執行，或由使用者自行執行。
+
+---
+
 ## 專案簡介
 
 食品輸銷問答 API，基於 FastAPI + PostgreSQL (pgvector) + 遠端 Embedding/LLM Server 構建的 RAG 系統。支援中英雙語問答，回應包含負責單位、雙語解答與參考來源。
