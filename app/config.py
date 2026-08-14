@@ -1,3 +1,4 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 
@@ -55,7 +56,10 @@ class Settings(BaseSettings):
     chunk_overlap: int = 50
 
     # Breakdown Parameters
-    breakdown_engine: str = "v1"  # "v1" = regex-heavy, "v2" = LLM-first, "vlm" = visual multimodal
+    breakdown_engine: str = Field(
+        default="v1",
+        description="問卷解析引擎：'v1' (舊版 regex+LLM), 'v2' (LLM-First 方案A), 'vlm' (視覺多模態並行), 'langgraph' (循序閱讀+回讀)",
+    )
     breakdown_max_concurrency: int = 5
     breakdown_llm_verify: bool = False
     breakdown_nfkc_normalize: bool = True

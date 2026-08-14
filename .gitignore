@@ -58,4 +58,3 @@ tools/poppler/*
 !tools/poppler/.gitkeep
 !tools/LibreOfficePortable/
 tools/LibreOfficePortable/*
-tools/*

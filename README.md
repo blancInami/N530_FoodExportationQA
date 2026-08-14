@@ -38,14 +38,26 @@
     └─ Phase 4 回傳組裝 → OpenCC s2t → AskResponse → 非同步寫入查詢紀錄
 
 
+系統模組分層（app/services/）
+  ├─ breakdown/              ─ 問卷解析引擎家族（v1 / v2 / vlm / langgraph / preprocessing / dlq）
+  ├─ core/                   ─ 核心基礎服務（llm / embedding / translate）
+  └─ qa/                     ─ 問答檢索與入庫（retrieval / intent / ingest / query_log）
+
 獨立離線工具（tools/）
-  ├─ expand_keywords.py      ─ 單位對照表分工關鍵字 → LLM 擴充 → 寫回擴充關鍵字欄位
-    ├─ ingest_agent.py         ─ 文件 → markitdown（→ doc-to-json 降級）→ Gemma-4 LLM → INSERT 知識文獻三表
-    ├─ batch_ingest_regulations.py ─ 批次掃描 法規/REGULATION|GUIDELINE|QA 子資料夾 → 逐一呼叫 ingest_agent
-    ├─ extract_terms.py        ─ PDF 配對 → doc-to-json API（結構化/平文字雙模式）→ 語意切塊（chunk_by_structure）→ 平行 LLM 擷取 → 反向驗證 → CSV（含來源檔案）
-    ├─ db_extractor.py         ─ 問卷題目檔 (HTML) → LLM 擷取 → 寫入官方正規詞彙
-    ├─ extract_stems.py        ─ 官方正規詞彙 → 短詞映射 → app/resources/term_mapping.json（供 DictionaryMatcher 線上載入）
-    └─ extract_aliases.py      ─ 單位對照表分工關鍵字 → 機關別名映射 → app/resources/alias_mapping.json（供 intent.py Aho-Corasick 擴展）
+  ├─ evaluation/             ─ 問卷解析精準度評估工具（全引擎支援）
+  │    ├─ evaluate_breakdown.py
+  │    ├─ evaluate_breakdown_v2.py
+  │    ├─ evaluate_breakdown_vlm.py
+  │    └─ evaluate_breakdown_langgraph.py
+  ├─ term_extraction/        ─ 雙語專有名詞、別名與詞幹離線擷取工具鏈
+  │    ├─ extract_terms.py
+  │    ├─ extract_stems.py
+  │    ├─ extract_aliases.py
+  │    └─ db_extractor.py
+  ├─ ingestion/              ─ 法規與知識文獻離線批次入庫工具
+  │    ├─ ingest_agent.py
+  │    └─ batch_ingest_regulations.py
+  └─ data/                   ─ 離線萃取之 CSV 專有名詞辭典檔案
 ```
 
 ---
@@ -282,41 +294,55 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ]
 ```
 
-**處理流程與權責**
+---
 
-1. MarkItDown 將檔案轉為 Markdown；顯式 Word 目錄只會移除 `目次` / `Table of Contents` 標題後的連續 `#_Toc...` 內部連結。
-2. 可視文字先經 NFKC 正規化，統一全形數字、英文字母與標點；一般超連結 target、HTML/XML 標籤與 fenced code 維持原樣。
-3. 已辨識的問卷表格優先走 deterministic fast path；不需要 LLM。
-4. 其他文件由 parser 掃描 Markdown heading、顯式小數題號、括號題號、字母項與安全的 inline Roman 子項，建立 `SourceQuestionCandidate`。
-5. 題號由 parser 擁有。LLM 只能回傳 parser 提供的 `source_key`、英文 `question_text` 與 `role`，不得重建或改寫 `question_id`。
-6. 僅明確標示為 `continuation` 的內容可合併到前一同題號項目；相同題號的獨立來源項目會保留為不同結果。
-7. 長文件採語義切塊與 Semaphore 控制並行 LLM 呼叫；`BREAKDOWN_MAX_CONCURRENCY` 可調整並行上限。
+#### 核心解析引擎與架構模式（可由 `.env` 中的 `BREAKDOWN_ENGINE` 切換）
 
-**已處理的來源格式**
+系統支援四種解析引擎，適應不同問卷複雜度與視覺排版要求：
 
-- 全形／半形混雜的題號與標點。
-- Word 目錄轉成 MarkItDown `#_Toc...` link 的內容。
-- 問卷表格中的顯式題號、括號父項、字母子項與 inline Roman 子項。
-- HACCP 類文本中的 `(i)` / `(ii)` 子項：會排除 `c (ii)`、`of (d)` 等交叉引用，避免誤生新題。
-- MarkItDown 將 Word 自動清單退化為連續 `| * 1. ... |` 表格列時：在同一連續群組內可還原為父題下的 `.1`、`.2`、`.3` 等獨立項目。
+1. **`langgraph`（【推薦】擬人化循序閱讀與主動回讀狀態機）**：
+   - **實作模組**：[`app/services/breakdown_langgraph.py`](file:///C:/Users/6747/Desktop/Projekt/2026/N530/N530_FoodExportationQA/app/services/breakdown_langgraph.py)
+   - **核心機制**：
+     - **轉檔預處理**：透過 `app/lo/file_utils.py`（LibreOffice + Poppler）將 Word / PDF 展開為高解析度逐頁 JPEG。
+     - **Node 1 (TOC 導航)**：分析前置頁建立全局大綱樹（`toc_structure`）。
+     - **Node 2 (逐頁研讀)**：由上而下閱讀，優先縫合上一頁遺留的 `pending_context`，並萃取實質問卷題目。
+     - **Node 3 (條件路由)**：若偵測到題號斷裂或跨頁斷層，觸發回讀請求。
+     - **Node 4 (記憶回讀審查)**：從 Checkpoint 歷史調取前頁原始影像進行雙頁對照與修正。
+     - **Node 5 (全局統整)**：全篇完成後由 LLM 執行跨頁去重、題號標準化與偽題目二次過濾。
 
-**驗證與診斷**
+2. **`vlm`（視覺多模態並行解析）**：
+   - **實作模組**：[`app/services/breakdown_vlm.py`](file:///C:/Users/6747/Desktop/Projekt/2026/N530/N530_FoodExportationQA/app/services/breakdown_vlm.py)
+   - **核心機制**：
+     - **Pass 1 骨架掃描**：快速建立大綱樹並為每頁計算 `Active Ancestor Path`。
+     - **Pass 2 並行推論**：注入主章節路徑與嚴格題目性過濾規則，多頁並行送入 Vision 模型。
+     - **Pass 3 一致性校驗**：跨頁文字無縫拼接與全局雜訊清洗。
 
-- 每段會計算 `source_key` 的缺漏與重複；設定 `BREAKDOWN_LLM_VERIFY=true` 時，只會把異常 coverage 交由 LLM 唯讀覆核，覆核結果不會改寫題號。
-- `app/services/breakdown_dlq.py` 提供 best-effort JSONL DLQ writer。現階段預設關閉，供後續修復重試與人工檢視流程接入；DLQ 寫入不得影響正常 API 回應。
+3. **`v2`（純文字 LLM-First 全域骨架方案 A）**：
+   - **實作模組**：[`app/services/breakdown_v2.py`](file:///C:/Users/6747/Desktop/Projekt/2026/N530/N530_FoodExportationQA/app/services/breakdown_v2.py)
+   - **核心機制**：
+     - 將檔案轉為純文字 Markdown。
+     - Pass 1 建立大綱樹 $\rightarrow$ 切塊綁定祖先路徑 $\rightarrow$ Pass 2 並行 LLM 萃取 $\rightarrow$ Pass 3 全局審核。
 
-**目前限制**
+4. **`v1`（舊版 Regex-Heavy 狀態機）**：
+   - **實作模組**：[`app/services/breakdown.py`](file:///C:/Users/6747/Desktop/Projekt/2026/N530/N530_FoodExportationQA/app/services/breakdown.py)
+   - 採 deterministic 表格快速路徑 + 正規表達式狀態機 + LLM 輔助填入題目文字。
 
-- parser 不會依數字連續性自行補號，也不讓 LLM 猜測題號。
-- Word 自動編號若在 MarkItDown 後沒有留下可識別文字或表格列群組，尚未讀取 DOCX `w:numPr` / numbering XML 還原原始層級。
-- 以 `Part A`～`Part H` 為 scope、每個 Part 又從裸 `1.` 重新編號的文件尚未有專用 topology adapter；這類文件需要先建立 Part scope 與可答題目標註後再作 deterministic 支援。
+---
 
-**人工答案 benchmark**
+#### 問卷解析評估工具（`tools/`）
 
-以人工標註 JSON 評估題號 precision、recall、F1、文字正規化差異與耗時：
+提供統一與專屬評估工具，對照黃金標準答案（`tests/data/*_解析結果.json`）評估 Precision、Recall 與 F1：
 
 ```bash
-python tools/evaluate_breakdown.py --input "問卷.docx" --expected "人工解答.json" --min-recall 0.95
+# 1. 統一評估工具（支援所有模式：--mode langgraph | vlm | v2 | hybrid | structured）
+venv\Scripts\python.exe tools/evaluate_breakdown.py --input "tests/data/1_輸日禽畜肉品.docx" --expected "tests/data/1_輸日禽畜肉品_解析結果.json" --mode langgraph
+
+# 2. 專屬 LangGraph 評估工具
+venv\Scripts\python.exe tools/evaluate_breakdown_langgraph.py --input "tests/data/3_澳洲水產品.md" --expected "tests/data/3_澳洲水產品_解析結果.json"
+
+# 3. 專屬 V2 評估工具
+venv\Scripts\python.exe tools/evaluate_breakdown_v2.py --all
+```
 
 # 執行 parser + LLM + 來源題號校正的完整評估
 python tools/evaluate_breakdown.py --input "問卷.docx" --expected "人工解答.json" --mode hybrid --min-recall 0.95

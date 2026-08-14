@@ -572,8 +572,20 @@ async def breakdown_questionnaire(
 
         settings = get_settings()
         async with monitor_disconnect(request) as interrupt_signal:
-            # ── VLM 引擎直接接收原始檔案位元組 ─────────────────────────────
-            if settings.breakdown_engine == "vlm":
+            # ── VLM / LangGraph 引擎直接接收原始檔案位元組 ──────────────────
+            if settings.breakdown_engine == "langgraph":
+                try:
+                    from app.services.breakdown_langgraph import extract_questions_langgraph
+                    items = await run_interruptible(
+                        extract_questions_langgraph(content, file.filename or f"upload{ext}"),
+                        interrupt_signal,
+                        label="Breakdown LangGraph 循序研讀與回讀萃取",
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except ValueError as e:
+                    raise HTTPException(status_code=502, detail=f"LangGraph 解析失敗：{e}")
+            elif settings.breakdown_engine == "vlm":
                 try:
                     from app.services.breakdown_vlm import extract_questions_from_file_vlm
                     items = await run_interruptible(

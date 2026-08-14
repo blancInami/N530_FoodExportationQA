@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-TW">
 <head>
   <meta charset="UTF-8" />
@@ -309,16 +309,37 @@
         </li>
         <li><span class="folder">📁 services/</span>
           <ul>
-            <li><span class="file">📄 embedding.py</span><span class="desc">get_embedding() / get_embeddings_batch()</span></li>
-            <li><span class="file">📄 llm.py</span><span class="desc">chat_completion()</span></li>
-            <li><span class="file">📄 intent.py</span><span class="desc">IntentClassifier 雙層意圖分類</span></li>
-            <li><span class="file">📄 retrieval.py</span><span class="desc">hybrid_retrieve() Track A + Track B</span></li>
-            <li><span class="file">📄 ingest.py</span><span class="desc">ingest_questionnaire() 問卷向量化</span></li>
-            <li><span class="file">📄 translate.py</span><span class="desc">translate_with_dictionary()</span></li>
-            <li><span class="file">📄 breakdown.py</span><span class="desc">parser-owned candidates + LLM 英文題目萃取</span></li>
-            <li><span class="file">📄 breakdown_preprocessing.py</span><span class="desc">NFKC 正規化與 Markdown 表格線性化工具</span></li>
-            <li><span class="file">📄 breakdown_dlq.py</span><span class="desc">可選 JSONL dead-letter queue writer</span></li>
-            <li><span class="file">📄 query_log.py</span><span class="desc">save_query_log() 問答紀錄寫入（fire-and-forget）</span></li>
+            <li><span class="folder">📁 breakdown/</span><span class="desc">問卷解析引擎家族</span>
+              <ul>
+                <li><span class="file">📄 breakdown.py (v1)</span><span class="desc">Deterministic fast path + Regex 狀態機</span></li>
+                <li><span class="file">📄 breakdown_v2.py (v2)</span><span class="desc">LLM-First 全域骨架驅動方案 A</span></li>
+                <li><span class="file">📄 breakdown_vlm.py (vlm)</span><span class="desc">視覺多模態並行解析</span></li>
+                <li><span class="file">📄 breakdown_langgraph.py</span><span class="desc">LangGraph 擬人化循序閱讀與主動回讀</span></li>
+                <li><span class="file">📄 breakdown_preprocessing.py</span><span class="desc">NFKC 正規化與雙語表格線性化</span></li>
+                <li><span class="file">📄 breakdown_dlq.py</span><span class="desc">JSONL dead-letter queue writer</span></li>
+              </ul>
+            </li>
+            <li><span class="folder">📁 core/</span><span class="desc">核心基礎服務</span>
+              <ul>
+                <li><span class="file">📄 llm.py</span><span class="desc">chat_completion() & chat_completion_vision()</span></li>
+                <li><span class="file">📄 embedding.py</span><span class="desc">get_embeddings() 向量化</span></li>
+                <li><span class="file">📄 translate.py</span><span class="desc">translate_term() 專有名詞翻譯</span></li>
+              </ul>
+            </li>
+            <li><span class="folder">📁 qa/</span><span class="desc">問答檢索與入庫業務</span>
+              <ul>
+                <li><span class="file">📄 retrieval.py</span><span class="desc">hybrid_retrieve() Track A + Track B 雙軌檢索</span></li>
+                <li><span class="file">📄 intent.py</span><span class="desc">IntentClassifier 雙層意圖分類</span></li>
+                <li><span class="file">📄 ingest.py</span><span class="desc">ingest_questionnaire() 問卷切塊向量化</span></li>
+                <li><span class="file">📄 query_log.py</span><span class="desc">save_query_log() 查詢紀錄儲存</span></li>
+              </ul>
+            </li>
+          </ul>
+        </li>
+        <li><span class="folder">📁 lo/</span>
+          <ul>
+            <li><span class="file">📄 file_utils.py</span><span class="desc">LibreOffice Portable + Poppler 逐頁影像展開</span></li>
+            <li><span class="file">📄 lo_pool.py</span><span class="desc">LibreOffice Daemon Worker Pool</span></li>
           </ul>
         </li>
         <li><span class="folder">📁 utils/</span>
@@ -332,23 +353,32 @@
       </ul>
     </div>
     <div class="card">
-      <h4>tools/ — 離線工具</h4>
+      <h4>tools/ — 離線工具與評估</h4>
       <ul class="folder-tree">
-        <li><span class="file">📄 ingest_agent.py</span><span class="desc">文件 → Markdown → LLM → 知識文獻三表</span></li>
-        <li><span class="file">📄 batch_ingest_regulations.py</span><span class="desc">批次掃描法規資料夾</span></li>
-        <li><span class="file">📄 extract_terms.py</span><span class="desc">PDF 配對 → 術語擷取 → CSV</span></li>
-        <li><span class="file">📄 extract_stems.py</span><span class="desc">官方術語 → 短詞映射 → term_mapping.json</span></li>
-        <li><span class="file">📄 extract_aliases.py</span><span class="desc">分工關鍵字 → 別名 → alias_mapping.json</span></li>
-        <li><span class="file">📄 db_extractor.py</span><span class="desc">問卷 HTML → LLM 擷取 → 官方正規詞彙</span></li>
-        <li><span class="file">📄 db_utils.py</span><span class="desc">get_connection() / PLACEHOLDER / get_schema()</span></li>
-        <li><span class="file">📄 expand_keywords.py</span><span class="desc">分工關鍵字擴充</span></li>
-        <li><span class="file">📄 llm_client.py</span><span class="desc">extract_terms_from_chunk() (Gemma 4)</span></li>
-        <li><span class="file">📄 markdown_converter.py</span><span class="desc">markitdown 同步封裝</span></li>
-        <li><span class="file">📄 pdf_reader.py</span><span class="desc">doc-to-json API 讀取 PDF</span></li>
-        <li><span class="file">📄 chunking.py</span><span class="desc">chunk_by_structure() / chunk_text()</span></li>
-        <li><span class="file">📄 file_pairing.py</span><span class="desc">discover_pdf_pairs() 遞迴配對</span></li>
-        <li><span class="file">📄 validator.py</span><span class="desc">反向驗證（子字串比對）</span></li>
-        <li><span class="file">📄 aggregator.py</span><span class="desc">詞彙頻率聚合 + CSV 匯出</span></li>
+        <li><span class="folder">📁 evaluation/</span><span class="desc">問卷解析精準度評估工具</span>
+          <ul>
+            <li><span class="file">📄 evaluate_breakdown.py</span><span class="desc">統一評估工具（--mode langgraph | vlm | v2 | hybrid）</span></li>
+            <li><span class="file">📄 evaluate_breakdown_langgraph.py</span><span class="desc">LangGraph 循序閱讀專屬評估工具</span></li>
+            <li><span class="file">📄 evaluate_breakdown_v2.py</span><span class="desc">V2 全域骨架批次評估工具</span></li>
+            <li><span class="file">📄 evaluate_breakdown_vlm.py</span><span class="desc">VLM 多模態專屬評估工具</span></li>
+          </ul>
+        </li>
+        <li><span class="folder">📁 term_extraction/</span><span class="desc">雙語專有名詞、別名與詞幹離線擷取工具鏈</span>
+          <ul>
+            <li><span class="file">📄 extract_terms.py</span><span class="desc">PDF 配對 → 術語擷取 → CSV</span></li>
+            <li><span class="file">📄 extract_stems.py</span><span class="desc">官方術語 → 短詞映射 → term_mapping.json</span></li>
+            <li><span class="file">📄 extract_aliases.py</span><span class="desc">分工關鍵字 → 別名 → alias_mapping.json</span></li>
+            <li><span class="file">📄 db_extractor.py</span><span class="desc">問卷 HTML → LLM 擷取 → 官方正規詞彙</span></li>
+            <li><span class="file">📄 expand_keywords.py</span><span class="desc">分工關鍵字擴充</span></li>
+          </ul>
+        </li>
+        <li><span class="folder">📁 ingestion/</span><span class="desc">法規與知識文獻批次入庫</span>
+          <ul>
+            <li><span class="file">📄 ingest_agent.py</span><span class="desc">文件 → Markdown → LLM → 知識文獻三表</span></li>
+            <li><span class="file">📄 batch_ingest_regulations.py</span><span class="desc">批次掃描法規資料夾</span></li>
+          </ul>
+        <li><span class="folder">📁 data/</span><span class="desc">離線萃取 CSV 詞彙表 (terms.csv / new_terms.csv)</span></li>
+        <li><span class="folder">📁 LibreOfficePortable/ & poppler/</span><span class="desc">文件與 PDF 影像轉換相依工具</span></li>
       </ul>
     </div>
   </div>
@@ -573,61 +603,74 @@ _matcher = <span class="fn">DictionaryMatcher</span>()               <span class
 
 <!-- ═══ 8. Breakdown 題目萃取 ═══════════════════════════════════════════ -->
 <section id="breakdown">
-  <h2>8. Breakdown 題目萃取管線</h2>
+  <h2>8. Breakdown 問卷題目萃取管線（多引擎架構）</h2>
   <p>
-    <code>POST /api/v1/qa/breakdown</code> 將 PDF、Word 或 Excel 問卷轉為 Markdown，
-    產出 <code>question_id</code> 與純英文 <code>question_text</code>。此管線與 RAG 檢索獨立，
-    不寫入問卷資料表。
+    <code>POST /api/v1/qa/breakdown</code> 將 PDF、Word 或 Excel 問卷解析為結構化題號與題目列表，
+    產出 <code>question_id</code> 與純英文 <code>question_text</code>。此管線與 RAG 檢索獨立。
   </p>
 
-  <div class="pipeline">
-    <div class="phase">
-      <div class="phase-label gray">轉檔</div>
-      <div class="phase-body"><strong>MarkItDown</strong> 轉成 Markdown；上傳端點以 temporary file 處理，並以 <code>monitor_disconnect()</code> / <code>run_interruptible()</code> 保護長工作。</div>
-    </div>
-    <div class="arrow">↓</div>
-    <div class="phase">
-      <div class="phase-label">前處理</div>
-      <div class="phase-body"><strong>移除明確 Word 目錄與 NFKC 正規化。</strong>僅移除目錄標題後的 <code>#_Toc...</code> 內部連結；一般 URL、HTML/XML 標籤與 fenced code 不會被 NFKC 改寫。</div>
-    </div>
-    <div class="arrow">↓</div>
-    <div class="phase">
-      <div class="phase-label green">Deterministic</div>
-      <div class="phase-body"><strong>表格 fast path 或來源候選掃描。</strong>parser 識別 heading、顯式數字、括號父項、字母項與安全的 Roman 子項，建立不可由 LLM 改寫的 <code>SourceQuestionCandidate</code>。</div>
-    </div>
-    <div class="arrow">↓</div>
-    <div class="phase">
-      <div class="phase-label purple">LLM</div>
-      <div class="phase-body"><strong>只處理英文內容與角色。</strong>每個語義段注入 <code>&lt;Numbering_Context&gt;</code> 和 <code>&lt;Source_Candidates&gt;</code>；LLM 僅回傳 <code>source_key</code>、<code>question_text</code>、<code>role</code>，不得產生題號。</div>
-    </div>
-    <div class="arrow">↓</div>
-    <div class="phase">
-      <div class="phase-label warn">驗證</div>
-      <div class="phase-body"><strong>source-key coverage 與合併。</strong>缺漏或重複 key 會形成診斷報告；啟用 <code>BREAKDOWN_LLM_VERIFY</code> 時才做唯讀 LLM 覆核。只有 <code>continuation</code> 可附加至前一同題號項目，獨立來源即使題號相同也不合併。</div>
-    </div>
-  </div>
+  <p>系統支援四種解析引擎架構，可由環境變數 <code>BREAKDOWN_ENGINE</code> 動態切換：</p>
 
-  <div class="grid-2">
-    <div class="card">
-      <h4>已處理的結構模式</h4>
+  <div class="grid-2" style="margin-bottom: 24px;">
+    <div class="card" style="border-top: 4px solid #059669;">
+      <h4>🌟 1. LangGraph 擬人化循序閱讀引擎 (langgraph) 【推薦】</h4>
+      <p><strong>模組：</strong><code>app/services/breakdown_langgraph.py</code></p>
+      <p><strong>理念：</strong>模擬人類專家閱讀習慣，由上而下逐頁研讀，遇到斷層主動翻頁回讀。</p>
       <ul>
-        <li>全形／半形數字、字母與標點的 NFKC 統一。</li>
-        <li>MarkItDown Word 目錄內部連結排除。</li>
-        <li>括號父項、字母項、inline Roman 子項。</li>
-        <li>HACCP 中的交叉引用排除，例如 <code>c (ii)</code> 或 <code>of (d)</code> 不會生成假題。</li>
-        <li>退化為連續 <code>| * 1. ... |</code> 的 Word 自動清單，會還原成同父題下的獨立子項。</li>
+        <li><strong>轉檔：</strong>LibreOffice + Poppler 將 Word/PDF 展開為高解析度逐頁 JPEG。</li>
+        <li><strong>Node 1 (TOC)：</strong>前置頁提取目錄大綱樹（<code>toc_structure</code>），提供全局座標。</li>
+        <li><strong>Node 2 (Page Analyzer)：</strong>逐頁閱讀，優先縫合前頁 <code>pending_context</code>，萃取實質問題。</li>
+        <li><strong>Node 3 (Router)：</strong>若發現題號斷裂，自動觸發回讀請求。</li>
+        <li><strong>Node 4 (Back-read)：</strong>從 Checkpoint 調取前頁影像進行雙頁對照與修正。</li>
+        <li><strong>Node 5 (Reducer)：</strong>通讀全篇後由 LLM 執行跨頁去重與偽題目二次過濾。</li>
       </ul>
     </div>
-    <div class="card">
-      <h4>診斷與失敗保留</h4>
-      <p><code>SourceKeyCoverageReport</code> 保存 selected、missing 與 duplicate keys，供後續修復調度使用。</p>
-      <p><code>breakdown_dlq.py</code> 可在啟用時以 JSONL best-effort 寫入人工檢視資料；預設關閉，且預設只記錄 raw payload 的 SHA-256，不保存原文。</p>
-      <p>DLQ 寫入失敗不應影響已成功的 API 回應。</p>
+
+    <div class="card" style="border-top: 4px solid #2563eb;">
+      <h4>📷 2. 視覺多模態並行引擎 (vlm)</h4>
+      <p><strong>模組：</strong><code>app/services/breakdown_vlm.py</code></p>
+      <p><strong>理念：</strong>利用 Vision 模型直接辨識版面線條、縮排深度與表格結構。</p>
+      <ul>
+        <li><strong>Pass 1 骨架掃描：</strong>建立大綱樹並為每頁計算 <code>Active Ancestor Path</code>。</li>
+        <li><strong>Pass 2 並行推論：</strong>注入主章節前綴與嚴格題目性過濾，多頁並行送入 Vision 模型。</li>
+        <li><strong>Pass 3 一致性審查：</strong>無縫拼接跨頁題目，由 LLM 清洗非問卷雜訊。</li>
+      </ul>
     </div>
   </div>
 
-  <div class="alert alert-warn">
-    <strong>目前邊界：</strong>parser 不會依序號連續性補號，也不讓 LLM 猜題號。DOCX 自動編號若在 Markdown 中未留下可辨識 token，尚未讀取 <code>w:numPr</code> / numbering XML 還原。以 <code>Part A</code>～<code>Part H</code> 為 scope、每個 Part 又從裸 <code>1.</code> 重編的問卷，尚未具備專用 topology adapter；必須先建立 Part scope 與人工題目契約。
+  <div class="grid-2" style="margin-bottom: 24px;">
+    <div class="card" style="border-top: 4px solid #8b5cf6;">
+      <h4>📑 3. LLM-First 全域骨架方案 A (v2)</h4>
+      <p><strong>模組：</strong><code>app/services/breakdown_v2.py</code></p>
+      <p><strong>理念：</strong>適用純文字 Markdown 流程，透過全域章節大綱注入解決切塊斷鏈問題。</p>
+      <ul>
+        <li><strong>Pass 1 骨架抽取：</strong>快速掃描生成 Outline Tree。</li>
+        <li><strong>Path Binding：</strong>每個切塊精確綁定 <code>active_ancestor_path</code>（如 II.1）。</li>
+        <li><strong>Pass 2 並行萃取：</strong>強制 LLM 以祖先路徑為前綴展開題號。</li>
+        <li><strong>Pass 3 全域審核：</strong>全篇去重與一致性校驗。</li>
+      </ul>
+    </div>
+
+    <div class="card" style="border-top: 4px solid #64748b;">
+      <h4>⚙️ 4. Deterministic + Regex 狀態機 (v1)</h4>
+      <p><strong>模組：</strong><code>app/services/breakdown.py</code></p>
+      <p><strong>理念：</strong>表格走 Deterministic Fast Path，非表格走 Regex 狀態機 + LLM 內容填入。</p>
+      <ul>
+        <li><strong>NFKC 正規化：</strong>統一全半形數字與標點。</li>
+        <li><strong>Parser-owned Candidates：</strong>正則狀態機提取題號，LLM 僅填入純英文題目文字。</li>
+        <li><strong>診斷 DLQ：</strong>可選 JSONL 死信佇列記錄異常。</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom: 20px;">
+    <h4>📊 評估工具集（tools/evaluation/）</h4>
+    <p>提供多種命令列工具，對照黃金標準答案（<code>tests/data/*_解析結果.json</code>）評估 Precision、Recall 與 F1：</p>
+    <pre><span class="cm"># 統一評估入口（支援 --mode langgraph | vlm | v2 | hybrid | structured）</span>
+<span class="kw">python</span> tools/evaluation/evaluate_breakdown.py --input "tests/data/1_輸日禽畜肉品.docx" --expected "tests/data/1_輸日禽畜肉品_解析結果.json" --mode langgraph
+
+<span class="cm"># 專屬 LangGraph 評估工具</span>
+<span class="kw">python</span> tools/evaluation/evaluate_breakdown_langgraph.py --input "tests/data/3_澳洲水產品.md" --expected "tests/data/3_澳洲水產品_解析結果.json"</pre>
   </div>
 </section>
 
