@@ -76,11 +76,14 @@ _ROMAN_CHAPTER_RE = re.compile(r"^#{1,6}\s+.*?\b([IVXLCDM]+)[.．]\s", re.IGNORE
 _NUMBERED_HEADING_RE = re.compile(
     r"^(#{1,6})\s+(\d+(?:(?:[-－]|\.)\d+)*)(?:[.．])?(?=\s|$|[^\d])"
 )
+_BOLD_INTEGER_HEADING_RE = re.compile(r"^\*\*(\d+)[.．]\s+(.+?)\*\*$")
 _LIST_NUMBER_RE = re.compile(r"(?<![\w.])(\d+)[.．](?=\s)")
 _EXPLICIT_DECIMAL_ITEM_RE = re.compile(
     r"^(?:\|\s*)?(\d+(?:[.．]\d+)+)(?:[.．])?(?=\s|$)"
 )
 _PARENTHESIZED_PARENT_RE = re.compile(r"^(?:\|\s*)?[(（](\d+)[)）]")
+_TABLE_PARENTHESES_RE = re.compile(r"[(（](\d+)[)）]")
+_TABLE_AUTO_NUMBER_PREFIX_RE = re.compile(r"^\|\s*(?:\*\s*)?\d+[.．](?=\s)")
 _PARENTHESIZED_ROMAN_RE = re.compile(
     r"(?<!\w)[(（]([ivxlcdm]+)[)）]", re.IGNORECASE,
 )
@@ -299,6 +302,17 @@ def _scan_numbering_state(text: str, state: NumberingState) -> NumberingState:
             )
             continue
 
+        bold_integer_heading_match = _BOLD_INTEGER_HEADING_RE.match(raw_line.strip())
+        if bold_integer_heading_match and _has_english_content(
+            bold_integer_heading_match.group(2)
+        ):
+            state = NumberingState(
+                chapter=state.chapter,
+                numeric_path=(bold_integer_heading_match.group(1),),
+                numeric_levels=(999,),
+            )
+            continue
+
         decimal_item_match = _EXPLICIT_DECIMAL_ITEM_RE.match(plain_line)
         if decimal_item_match:
             label_parts = tuple(re.split(r"[.．]", decimal_item_match.group(1)))
@@ -309,7 +323,12 @@ def _scan_numbering_state(text: str, state: NumberingState) -> NumberingState:
             )
             continue
 
-        for match in _LIST_NUMBER_RE.finditer(plain_line):
+        table_parentheses_matches = (
+            _TABLE_PARENTHESES_RE.findall(plain_line)
+            if _TABLE_AUTO_NUMBER_PREFIX_RE.match(raw_line)
+            else []
+        )
+        for match in ([] if table_parentheses_matches else _LIST_NUMBER_RE.finditer(plain_line)):
             number = match.group(1)
             if len(state.numeric_path) > 1:
                 numeric_path = (*state.numeric_path[:-1], number)
@@ -324,12 +343,17 @@ def _scan_numbering_state(text: str, state: NumberingState) -> NumberingState:
             )
 
         parenthesized_match = _PARENTHESIZED_PARENT_RE.match(plain_line)
-        if parenthesized_match:
+        parenthesized_value = (
+            parenthesized_match.group(1)
+            if parenthesized_match
+            else (table_parentheses_matches[-1] if table_parentheses_matches else "")
+        )
+        if parenthesized_value:
             state = NumberingState(
                 chapter=state.chapter,
                 numeric_path=state.numeric_path,
                 numeric_levels=state.numeric_levels,
-                parenthesized=parenthesized_match.group(1),
+                parenthesized=parenthesized_value,
             )
 
         letter_match = _LETTER_ITEM_RE.search(raw_line)
