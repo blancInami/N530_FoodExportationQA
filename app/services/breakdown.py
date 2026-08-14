@@ -1127,8 +1127,15 @@ async def extract_questions(markdown_text: str) -> list[dict]:
         ValueError: 當所有區塊均無法成功萃取時。
     """
     pipeline_start = time.perf_counter()
-    markdown_text = strip_table_of_contents(markdown_text)
     settings = get_settings()
+
+    # ── v2 引擎委派 ────────────────────────────────────────────────────
+    if settings.breakdown_engine == "v2":
+        from app.services.breakdown_v2 import extract_questions as _extract_v2
+        logger.info("使用 breakdown v2 (LLM-First) 引擎")
+        return await _extract_v2(markdown_text)
+
+    markdown_text = strip_table_of_contents(markdown_text)
     if settings.breakdown_nfkc_normalize:
         markdown_text = normalize_markdown_for_breakdown(
             markdown_text,

@@ -18,6 +18,7 @@ from app.services.breakdown import (
     extract_questions,
     extract_structured_questions,
 )
+from app.services.breakdown_v2 import extract_questions as extract_questions_v2
 
 
 def _normalize_text(value: str) -> str:
@@ -39,7 +40,9 @@ def evaluate(input_path: Path, expected_path: Path, mode: str = "structured") ->
     markdown, toc_lines_removed, toc_detection_strategy = _strip_table_of_contents_with_metadata(markdown)
 
     extraction_started_at = time.perf_counter()
-    if mode == "hybrid":
+    if mode == "v2":
+        actual_items = asyncio.run(extract_questions_v2(markdown))
+    elif mode == "hybrid":
         actual_items = asyncio.run(extract_questions(markdown))
     else:
         actual_items = extract_structured_questions(markdown)
@@ -87,8 +90,8 @@ def main() -> int:
     parser.add_argument("--input", required=True, type=Path, help="問卷原始檔案")
     parser.add_argument("--expected", required=True, type=Path, help="人工答案 JSON")
     parser.add_argument(
-        "--mode", choices=("structured", "hybrid"), default="structured",
-        help="structured 僅測試表格快速路徑；hybrid 執行完整 parser + LLM 管線",
+        "--mode", choices=("structured", "hybrid", "v2"), default="structured",
+        help="structured 僅測試表格快速路徑；hybrid 執行完整 v1 parser + LLM 管線；v2 執行 LLM-First 管線",
     )
     parser.add_argument("--min-recall", type=float, default=0.95, help="題號 recall 門檻")
     parser.add_argument("--report", type=Path, help="選填：寫入 JSON 報告的路徑")

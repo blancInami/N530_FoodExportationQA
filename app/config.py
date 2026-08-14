@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     chunk_overlap: int = 50
 
     # Breakdown Parameters
+    breakdown_engine: str = "v1"  # "v1" = regex-heavy (legacy), "v2" = LLM-first
     breakdown_max_concurrency: int = 5
     breakdown_llm_verify: bool = False
     breakdown_nfkc_normalize: bool = True
