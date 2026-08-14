@@ -11,6 +11,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.dependencies import get_db_session
 from app.schemas.breakdown import BreakdownItem
 from app.schemas.qa import (
@@ -569,31 +570,45 @@ async def breakdown_questionnaire(
             tmp_path = tmp.name
         logger.debug("Breakdown：暫存檔建立 — 路徑=%s  大小=%d bytes", tmp_path, len(content))
 
-        # ── 3. 檔案轉換 Markdown（CPU-bound → asyncio.to_thread）──────────
+        settings = get_settings()
         async with monitor_disconnect(request) as interrupt_signal:
-            # ── 3. 檔案轉換 Markdown（CPU-bound → asyncio.to_thread）
-            try:
-                markdown = await run_interruptible(
-                    asyncio.to_thread(convert_file_to_markdown, tmp_path, ext),
-                    interrupt_signal,
-                    label="Breakdown Markdown 轉換",
-                )
-            except asyncio.CancelledError:
-                raise
-            except ValueError as e:
-                raise HTTPException(status_code=422, detail=str(e))
+            # ── VLM 引擎直接接收原始檔案位元組 ─────────────────────────────
+            if settings.breakdown_engine == "vlm":
+                try:
+                    from app.services.breakdown_vlm import extract_questions_from_file_vlm
+                    items = await run_interruptible(
+                        extract_questions_from_file_vlm(content, file.filename or f"upload{ext}"),
+                        interrupt_signal,
+                        label="Breakdown VLM 視覺多模態題目萃取",
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except ValueError as e:
+                    raise HTTPException(status_code=502, detail=f"VLM 解析失敗：{e}")
+            else:
+                # ── 3. 檔案轉換 Markdown（CPU-bound → asyncio.to_thread）
+                try:
+                    markdown = await run_interruptible(
+                        asyncio.to_thread(convert_file_to_markdown, tmp_path, ext),
+                        interrupt_signal,
+                        label="Breakdown Markdown 轉換",
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except ValueError as e:
+                    raise HTTPException(status_code=422, detail=str(e))
 
-            # ── 4. LLM 萍取
-            try:
-                items = await run_interruptible(
-                    extract_questions(markdown),
-                    interrupt_signal,
-                    label="Breakdown LLM 題目萍取",
-                )
-            except asyncio.CancelledError:
-                raise
-            except ValueError as e:
-                raise HTTPException(status_code=502, detail=f"LLM 解析失敗：{e}")
+                # ── 4. LLM 萃取
+                try:
+                    items = await run_interruptible(
+                        extract_questions(markdown),
+                        interrupt_signal,
+                        label="Breakdown LLM 題目萃取",
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except ValueError as e:
+                    raise HTTPException(status_code=502, detail=f"LLM 解析失敗：{e}")
 
 
     finally:

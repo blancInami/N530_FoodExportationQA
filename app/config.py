@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     chunk_overlap: int = 50
 
     # Breakdown Parameters
-    breakdown_engine: str = "v1"  # "v1" = regex-heavy (legacy), "v2" = LLM-first
+    breakdown_engine: str = "v1"  # "v1" = regex-heavy, "v2" = LLM-first, "vlm" = visual multimodal
     breakdown_max_concurrency: int = 5
     breakdown_llm_verify: bool = False
     breakdown_nfkc_normalize: bool = True
@@ -63,6 +63,11 @@ class Settings(BaseSettings):
     breakdown_dlq_enabled: bool = False
     breakdown_dlq_path: str = "logs/breakdown-dlq.jsonl"
     breakdown_dlq_include_raw_payload: bool = False
+    vlm_model: str = ""  # Empty string defaults to llm_model
+    vlm_url: str = ""  # Empty string defaults to llm_url
+    vlm_max_concurrency: int = 4
+    vlm_dpi: int = 150
+    vlm_input_mode: str = "images"  # "images" (PDF -> Poppler JPEG) | "pdf_direct" (direct PDF base64)
 
     # Logging
     log_level: str = "INFO"

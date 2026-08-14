@@ -175,3 +175,109 @@ async def chat_completion(
     logger.info("LLM 處理完成（或部分中斷）：輸出總長度=%d  耗時=%.1f ms", len(content), elapsed_ms)
     logger.debug("LLM 回應預覽：%s ...", content[:200])
     return content
+
+
+async def chat_completion_vision(
+    prompt: str,
+    images: list[dict[str, str]],  # List of {"content_b64": str, "mime_type": str}
+    temperature: float = 0,
+    max_tokens: int = 4096,
+    system_prompt: str | None = None,
+    interrupt_event: asyncio.Event | None = None,
+) -> str:
+    """
+    Call the VLM / multimodal LLM endpoint with visual content (OpenAI-compatible format).
+    
+    Args:
+        prompt: User text instructions.
+        images: List of image objects with base64 strings and MIME types.
+        temperature: Sampling temperature.
+        max_tokens: Maximum tokens in response.
+        system_prompt: System prompt instructions.
+        interrupt_event: Async event to signal cancellation.
+    """
+    settings = get_settings()
+    
+    # 決定 URL 與模型名稱（優先使用 vlm 設定，未填則回退至主 llm 設定）
+    model_name = settings.vlm_model or settings.llm_model
+    if settings.vlm_url:
+        url = settings.vlm_url if settings.use_gateway else f"{settings.vlm_url}/v1/chat/completions"
+    elif settings.use_gateway:
+        url = settings.llm_url
+    else:
+        url = f"{settings.llm_url}/v1/chat/completions"
+        
+    headers = settings.gw_headers
+
+    # 組裝多模態 user content
+    user_content: list[dict[str, object]] = [{"type": "text", "text": prompt}]
+    for img in images:
+        b64 = img.get("content_b64", "")
+        mime = img.get("mime_type", "image/jpeg")
+        user_content.append({
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:{mime};base64,{b64}",
+            },
+        })
+
+    payload = {
+        "model": model_name,
+        "messages": [
+            {"role": "system", "content": system_prompt if system_prompt is not None else _DEFAULT_SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "stream": True,
+    }
+
+    logger.info(
+        "VLM 串流請求啟動：url=%s  model=%s  圖片數=%d  提示長度=%d",
+        url, model_name, len(images), len(prompt),
+    )
+    start = time.perf_counter()
+    chunks = []
+    timeout = httpx.Timeout(180.0, connect=10.0)
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        try:
+            async with client.stream("POST", url, json=payload, headers=headers) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if interrupt_event is not None and interrupt_event.is_set():
+                        logger.warning("檢測到外部中斷訊號，主動關閉連線以空出 VLM 資源")
+                        raise asyncio.CancelledError("Client disconnected")
+
+                    if not line.strip():
+                        continue
+
+                    if line.startswith("data: "):
+                        clean_line = line[6:].strip()
+                        if clean_line == "[DONE]":
+                            break
+                        try:
+                            data = json.loads(clean_line)
+                            choice = data["choices"][0]
+                            delta = choice.get("delta", {})
+                            content_chunk = delta.get("content")
+                            if content_chunk:
+                                chunks.append(content_chunk)
+                        except (json.JSONDecodeError, KeyError, IndexError) as e:
+                            logger.debug("解析流式數據行失敗: %s, 錯誤: %s", line, e)
+                            continue
+
+        except httpx.HTTPStatusError as e:
+            logger.error("VLM 伺服器 HTTP 錯誤：狀態碼=%s  url=%s", e.response.status_code, url)
+            raise HTTPException(status_code=502, detail=f"VLM server returned {e.response.status_code}")
+        except httpx.RequestError as e:
+            logger.error("VLM 伺服器無法連線：%s  url=%s", e, url)
+            raise HTTPException(status_code=503, detail=f"VLM server unreachable: {e}")
+        except asyncio.CancelledError:
+            logger.info("FastAPI Task 協程被取消，釋放 VLM 連線資源。")
+            raise
+
+    elapsed_ms = (time.perf_counter() - start) * 1000
+    content = "".join(chunks)
+    logger.info("VLM 處理完成：輸出總長度=%d  耗時=%.1f ms", len(content), elapsed_ms)
+    return content
