@@ -613,16 +613,16 @@ _matcher = <span class="fn">DictionaryMatcher</span>()               <span class
 
   <div class="grid-2" style="margin-bottom: 24px;">
     <div class="card" style="border-top: 4px solid #059669;">
-      <h4>🌟 1. LangGraph 擬人化循序閱讀引擎 (langgraph) 【推薦】</h4>
+      <h4>🌟 1. LangGraph 擬人化循序閱讀與任意頁回讀引擎 (langgraph) 【推薦】</h4>
       <p><strong>模組：</strong><code>app/services/breakdown_langgraph.py</code></p>
-      <p><strong>理念：</strong>模擬人類專家閱讀習慣，由上而下逐頁研讀，遇到斷層主動翻頁回讀。</p>
+      <p><strong>理念：</strong>模擬人類專家閱讀習慣，目錄區間錨定 + 標題棧工作記憶 + 任意指定跨度回讀。</p>
       <ul>
         <li><strong>轉檔：</strong>LibreOffice + Poppler 將 Word/PDF 展開為高解析度逐頁 JPEG。</li>
-        <li><strong>Node 1 (TOC)：</strong>前置頁提取目錄大綱樹（<code>toc_structure</code>），提供全局座標。</li>
-        <li><strong>Node 2 (Page Analyzer)：</strong>逐頁閱讀，優先縫合前頁 <code>pending_context</code>，萃取實質問題。</li>
-        <li><strong>Node 3 (Router)：</strong>若發現題號斷裂，自動觸發回讀請求。</li>
-        <li><strong>Node 4 (Back-read)：</strong>從 Checkpoint 調取前頁影像進行雙頁對照與修正。</li>
-        <li><strong>Node 5 (Reducer)：</strong>通讀全篇後由 LLM 執行跨頁去重與偽題目二次過濾。</li>
+        <li><strong>Node 1 (TOC 區間錨定)：</strong>前置頁計算章節精確頁碼區間（如 <code>Chapter II: Pages 3~12</code>），建立導航地圖。</li>
+        <li><strong>Node 2 (Page Analyzer)：</strong>注入 TOC 區間與活躍標題棧（<code>heading_stack</code>），若遇斷層可指定任意頁碼列表（如 <code>[3, 7]</code>）請求回讀。</li>
+        <li><strong>Node 3 (Router)：</strong>智慧路由分支與防死鎖防禦（單頁回讀上限 1 次，最多打包 3 頁影像）。</li>
+        <li><strong>Node 4 (Arbitrary Back-read)：</strong>調取指定根章節定義頁、前頁與當前頁多影像進行跨度對照還原。</li>
+        <li><strong>Node 5 (Reducer)：</strong>通讀全篇後由 LLM 執行跨頁去重、格式規範化與偽題目二次過濾。</li>
       </ul>
     </div>
 
