@@ -356,29 +356,47 @@ async def extract_questions_from_file_vlm(file_bytes: bytes, filename: str) -> l
     merged = _deduplicate_items(merged)
     logger.info("[VLM管線步驟3/4完成] 去重合併完成：原始=%d 筆 -> 去重後=%d 筆", before_dedup_count, len(merged))
 
-    # ── 5. Pass 3 全局一致性審查與偽題目二次過濾 ─────────────────────────
-    if len(merged) <= 150:
-        logger.info("[VLM管線步驟4/4] 啟動全局一致性校驗與偽題目過濾 (題目數=%d 筆)...", len(merged))
+    # ── 5. Pass 3 全局一致性審查與偽題目二次過濾（分批並行處理）──────────────────
+    if merged:
+        batch_size = 80
+        batches = [merged[i:i + batch_size] for i in range(0, len(merged), batch_size)]
+        total_batches = len(batches)
+        logger.info("[VLM管線步驟4/4] 啟動全局一致性校驗與偽題目過濾（共 %d 個批次，題目數=%d 筆）...", total_batches, len(merged))
         t_verify_start = time.perf_counter()
-        try:
-            prompt = json.dumps(merged, ensure_ascii=False, indent=2)
-            raw_v = await chat_completion(
-                prompt=prompt,
-                system_prompt=VLM_CONSISTENCY_SYSTEM_PROMPT,
-                temperature=0,
-                max_tokens=8192,
-            )
-            verified = json.loads(_clean_vlm_json(raw_v))
-            verified_items = _validate_vlm_extraction(verified)
-            if verified_items:
-                logger.info("[VLM管線步驟4/4完成] 全局校驗成功：校驗前=%d 筆 -> 校驗後=%d 筆", len(merged), len(verified_items))
-                merged = verified_items
-        except Exception as e:
-            logger.warning("[VLM管線步驟4/4跳過] 全局一致性審查未套用：%s", e)
+        sem_v = asyncio.Semaphore(2)
+
+        async def _verify_vlm_batch(batch_items: list[dict], b_idx: int) -> list[dict]:
+            async with sem_v:
+                try:
+                    prompt = json.dumps(batch_items, ensure_ascii=False, indent=2)
+                    raw_v = await chat_completion(
+                        prompt=prompt,
+                        system_prompt=VLM_CONSISTENCY_SYSTEM_PROMPT,
+                        temperature=0,
+                        max_tokens=8192,
+                    )
+                    verified = json.loads(_clean_vlm_json(raw_v))
+                    verified_items = _validate_vlm_extraction(verified)
+                    if verified_items:
+                        return verified_items
+                    return batch_items
+                except Exception as e:
+                    logger.warning("[VLM管線步驟4/4警告] 批次 %d/%d 審查異常，保留原始項目：%s", b_idx + 1, total_batches, e)
+                    return batch_items
+
+        tasks = [_verify_vlm_batch(batches[i], i) for i in range(total_batches)]
+        results_v = await asyncio.gather(*tasks, return_exceptions=True)
+
+        verified_all: list[dict] = []
+        for i, res in enumerate(results_v):
+            if isinstance(res, list):
+                verified_all.extend(res)
+            else:
+                verified_all.extend(batches[i])
+
+        merged = _deduplicate_items(verified_all)
         t_verify_elapsed = (time.perf_counter() - t_verify_start) * 1000
-        logger.info("[VLM全局校驗耗時] %.1f ms", t_verify_elapsed)
-    else:
-        logger.info("[VLM管線步驟4/4跳過] 題目數超過 150 筆，略過全局校驗")
+        logger.info("[VLM全局校驗完成] 耗時=%.1f ms  最終題目數=%d 筆", t_verify_elapsed, len(merged))
 
     total_pipeline_ms = (time.perf_counter() - pipeline_start) * 1000
     logger.info("[VLM全管線結束] 檔名=%s  最終輸出題目數=%d 筆  總耗時=%.1f ms", filename, len(merged), total_pipeline_ms)

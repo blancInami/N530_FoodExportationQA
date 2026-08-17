@@ -20,6 +20,8 @@ from app.services.breakdown_v2 import (
     _validate_extraction,
     _extract_heading_candidates,
     _bind_ancestor_paths,
+    _partition_items_for_verification,
+    _verify_consistency,
     split_markdown_semantically,
     extract_questions,
 )
@@ -315,6 +317,64 @@ class ExtractQuestionsIntegrationTests(unittest.IsolatedAsyncioTestCase):
         call_args = mock_llm.call_args
         prompt = call_args.kwargs.get("prompt", call_args.args[0] if call_args.args else "")
         self.assertNotIn("_Toc12345", prompt)
+
+
+class PartitionAndBatchConsistencyTests(unittest.IsolatedAsyncioTestCase):
+    """Tests for _partition_items_for_verification and large dataset verification."""
+
+    def test_partition_small_dataset_single_batch(self):
+        items = [{"question_id": str(i), "question_text": f"Q{i}"} for i in range(50)]
+        batches = _partition_items_for_verification(items, target_batch_size=80)
+        self.assertEqual(len(batches), 1)
+        self.assertEqual(len(batches[0]), 50)
+
+    def test_partition_large_dataset_multiple_batches(self):
+        items = [{"question_id": str(i), "question_text": f"Q{i}"} for i in range(250)]
+        batches = _partition_items_for_verification(items, target_batch_size=80)
+        # 250 / 80 = 4 batches (80, 80, 80, 10)
+        self.assertEqual(len(batches), 4)
+        self.assertEqual(len(batches[0]), 80)
+        self.assertEqual(len(batches[3]), 10)
+        # Total items preserved
+        total_items = sum(len(b) for b in batches)
+        self.assertEqual(total_items, 250)
+
+    @patch("app.services.breakdown_v2.chat_completion", new_callable=AsyncMock)
+    async def test_verify_consistency_processes_large_dataset_without_skipping(self, mock_llm):
+        """Verify that a 200-item questionnaire is verified in batches rather than skipped."""
+        items = [{"question_id": str(i), "question_text": f"Question {i}"} for i in range(200)]
+
+        # Mock LLM to return items with verified flag
+        def mock_verify(prompt, system_prompt=None, **kwargs):
+            batch_data = json.loads(prompt)
+            return json.dumps([
+                {"question_id": item["question_id"], "question_text": item["question_text"]}
+                for item in batch_data
+            ])
+
+        mock_llm.side_effect = mock_verify
+
+        result = await _verify_consistency(items, max_concurrency=2)
+
+        self.assertEqual(len(result), 200)
+        # 200 items / 80 batch size = 3 batches, so LLM should be called 3 times
+        self.assertEqual(mock_llm.call_count, 3)
+
+    @patch("app.services.breakdown_v2.chat_completion", new_callable=AsyncMock)
+    async def test_verify_consistency_partial_batch_failure_fallback(self, mock_llm):
+        """Verify that if one batch fails, it falls back to raw items for that batch without failing overall."""
+        items = [{"question_id": str(i), "question_text": f"Question {i}"} for i in range(160)]
+
+        # First batch succeeds, second batch fails
+        mock_llm.side_effect = [
+            json.dumps([{"question_id": str(i), "question_text": f"Question {i}"} for i in range(80)]),
+            Exception("Simulated LLM Timeout"),
+        ]
+
+        result = await _verify_consistency(items, max_concurrency=1)
+
+        # All 160 items should still be returned
+        self.assertEqual(len(result), 160)
 
 
 if __name__ == "__main__":

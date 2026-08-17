@@ -705,7 +705,7 @@ def advance_page_node(state: QuestionnaireState) -> QuestionnaireState:
 
 
 async def final_reducer_node(state: QuestionnaireState) -> QuestionnaireState:
-    """Node 5: 全局統整、跨頁去重與題號統一規範化節點。"""
+    """Node 5: 全局統整、跨頁去重、分批審查與題號統一規範化節點。"""
     history = state.get("page_history", {})
     all_extracted: list[dict] = []
     for p in sorted(history.keys()):
@@ -716,26 +716,46 @@ async def final_reducer_node(state: QuestionnaireState) -> QuestionnaireState:
     deduped = _canonicalize_all_question_ids(all_extracted)
     logger.info("[LangGraph Reducer] 跨頁去重與題號規範化完成：%d 筆 -> %d 筆", before_count, len(deduped))
 
-    # 全局 LLM 審查與清洗
-    if deduped and len(deduped) <= 150:
-        logger.info("[LangGraph Reducer] 啟動全局 LLM 格式與偽題目清洗 (題目數=%d 筆)...", len(deduped))
+    # 全局 LLM 審查與清洗（分批處理，每批最多 80 題，支援 300+ 題大篇幅問卷）
+    if deduped:
+        batch_size = 80
+        batches = [deduped[i:i + batch_size] for i in range(0, len(deduped), batch_size)]
+        total_batches = len(batches)
+        logger.info("[LangGraph Reducer] 啟動全局 LLM 格式與偽題目清洗（共 %d 個批次，總題數=%d 筆）...", total_batches, len(deduped))
         t0 = time.perf_counter()
-        try:
-            prompt = json.dumps(deduped, ensure_ascii=False, indent=2)
-            raw = await chat_completion(
-                prompt=prompt,
-                system_prompt=LANGGRAPH_REDUCER_SYSTEM_PROMPT,
-                temperature=0,
-                max_tokens=8192,
-            )
-            verified = json.loads(_clean_json(raw))
-            valid = _validate_extracted_questions(verified)
-            if valid:
-                logger.info("[LangGraph Reducer完成] 全局清洗完成：%d 筆 -> %d 筆", len(deduped), len(valid))
-                deduped = valid
-        except Exception as e:
-            logger.warning("[LangGraph Reducer跳過] 全局審查失敗：%s", e)
-        logger.info("[LangGraph Reducer耗時] %.1f ms", (time.perf_counter() - t0) * 1000)
+        sem = asyncio.Semaphore(2)
+
+        async def _verify_reducer_batch(batch_items: list[dict], b_idx: int) -> list[dict]:
+            async with sem:
+                try:
+                    prompt = json.dumps(batch_items, ensure_ascii=False, indent=2)
+                    raw = await chat_completion(
+                        prompt=prompt,
+                        system_prompt=LANGGRAPH_REDUCER_SYSTEM_PROMPT,
+                        temperature=0,
+                        max_tokens=8192,
+                    )
+                    verified = json.loads(_clean_json(raw))
+                    valid = _validate_extracted_questions(verified)
+                    if valid:
+                        return valid
+                    return batch_items
+                except Exception as e:
+                    logger.warning("[LangGraph Reducer警告] 批次 %d/%d 審查異常，保留原始項目：%s", b_idx + 1, total_batches, e)
+                    return batch_items
+
+        tasks = [_verify_reducer_batch(batches[i], i) for i in range(total_batches)]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        verified_all: list[dict] = []
+        for i, res in enumerate(results):
+            if isinstance(res, list):
+                verified_all.extend(res)
+            else:
+                verified_all.extend(batches[i])
+
+        deduped = verified_all
+        logger.info("[LangGraph Reducer完成] 全部分批清洗完成：耗時=%.1f ms", (time.perf_counter() - t0) * 1000)
 
     # 最終輸出再做一次題號格式規範化保障
     final_canonical = _canonicalize_all_question_ids(deduped)

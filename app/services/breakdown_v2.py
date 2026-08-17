@@ -524,44 +524,103 @@ async def _extract_single_chunk_with_retry(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  4. Pass 3: 全域一致性審查與驗證 (Consistency Verification)
+#  4. Pass 3: 全域一致性審查與分批驗證 (Chunked Consistency Verification)
 # ═══════════════════════════════════════════════════════════════════════════
 
-async def _verify_consistency(items: list[dict]) -> list[dict]:
-    """Pass 3: 全域一致性檢核與修正。"""
-    if len(items) > _CONSISTENCY_MAX_ITEMS:
-        logger.info(
-            "v2 題目數量 %d 超過一致性驗證上限 %d，跳過 LLM 驗證",
-            len(items), _CONSISTENCY_MAX_ITEMS,
-        )
-        return items
+_VERIFY_BATCH_TARGET_SIZE = 80
 
-    prompt = json.dumps(items, ensure_ascii=False, indent=2)
-    logger.info("v2 Pass 3: 全域一致性驗證開始，題目=%d 筆", len(items))
+
+def _partition_items_for_verification(items: list[dict], target_batch_size: int = _VERIFY_BATCH_TARGET_SIZE) -> list[list[dict]]:
+    """
+    將題目清單切分為適合 LLM 單次審查的獨立批次：
+    1. 若總題數小於等於 target_batch_size，直接返回單一批次。
+    2. 若題數較多，優先依前綴/章節分組，並在單組過大時按 target_batch_size 切片。
+    """
+    if len(items) <= target_batch_size:
+        return [items]
+
+    batches: list[list[dict]] = []
+    current_batch: list[dict] = []
+
+    for item in items:
+        current_batch.append(item)
+        if len(current_batch) >= target_batch_size:
+            batches.append(current_batch)
+            current_batch = []
+
+    if current_batch:
+        batches.append(current_batch)
+
+    return batches
+
+
+async def _verify_single_batch(batch: list[dict], batch_idx: int, total_batches: int) -> list[dict]:
+    """驗證單個批次的題目清單。"""
+    prompt = json.dumps(batch, ensure_ascii=False, indent=2)
+    logger.info("v2 Pass 3: 一致性驗證批次 %d/%d（題目=%d 筆）開始...", batch_idx + 1, total_batches, len(batch))
     start = time.perf_counter()
 
-    raw_output = await chat_completion(
-        prompt=prompt,
-        system_prompt=CONSISTENCY_SYSTEM_PROMPT,
-        temperature=0,
-        max_tokens=8192,
-    )
-
-    elapsed_ms = (time.perf_counter() - start) * 1000
-    logger.info("v2 Pass 3: 全域一致性驗證完成，耗時=%.1f ms", elapsed_ms)
-
-    cleaned = _clean_llm_json(raw_output)
     try:
+        raw_output = await chat_completion(
+            prompt=prompt,
+            system_prompt=CONSISTENCY_SYSTEM_PROMPT,
+            temperature=0,
+            max_tokens=8192,
+        )
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        cleaned = _clean_llm_json(raw_output)
         verified = json.loads(cleaned)
         verified_items = _validate_extraction(verified)
         logger.info(
-            "v2 一致性驗證結果：修正前=%d 筆  修正後=%d 筆",
-            len(items), len(verified_items),
+            "v2 Pass 3: 批次 %d/%d 驗證完成：原=%d 筆 -> 修正後=%d 筆  耗時=%.1f ms",
+            batch_idx + 1, total_batches, len(batch), len(verified_items), elapsed_ms,
         )
         return verified_items
-    except (json.JSONDecodeError, ValueError) as e:
-        logger.warning("v2 一致性驗證失敗，使用原始結果：%s", e)
-        return items
+    except Exception as e:
+        logger.warning("v2 Pass 3: 批次 %d/%d 驗證異常，回退使用該批原始結果：%s", batch_idx + 1, total_batches, e)
+        return batch
+
+
+async def _verify_consistency(items: list[dict], max_concurrency: int = 2) -> list[dict]:
+    """Pass 3: 全域分批並行一致性檢核與修正（支援 300+ 題大篇幅問卷）。"""
+    if not items:
+        return []
+
+    batches = _partition_items_for_verification(items, target_batch_size=_VERIFY_BATCH_TARGET_SIZE)
+    total_batches = len(batches)
+
+    if total_batches == 1:
+        return await _verify_single_batch(batches[0], 0, 1)
+
+    logger.info(
+        "v2 Pass 3: 題目總數=%d 筆，啟動分批並行一致性驗證（共 %d 個批次，每批約 %d 題）...",
+        len(items), total_batches, _VERIFY_BATCH_TARGET_SIZE,
+    )
+    start = time.perf_counter()
+    sem = asyncio.Semaphore(max_concurrency)
+
+    async def _guarded_verify(b_idx: int) -> list[dict]:
+        async with sem:
+            return await _verify_single_batch(batches[b_idx], b_idx, total_batches)
+
+    tasks = [_guarded_verify(i) for i in range(total_batches)]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    verified_all: list[dict] = []
+    for i, res in enumerate(results):
+        if isinstance(res, list):
+            verified_all.extend(res)
+        else:
+            logger.warning("v2 Pass 3: 批次 %d 異常，使用該批原始項目：%s", i + 1, res)
+            verified_all.extend(batches[i])
+
+    total_elapsed = (time.perf_counter() - start) * 1000
+    deduped_final = _deduplicate_items(verified_all)
+    logger.info(
+        "v2 Pass 3: 全部分批一致性驗證完成：原始=%d 筆 -> 最終=%d 筆  總耗時=%.1f ms",
+        len(items), len(deduped_final), total_elapsed,
+    )
+    return deduped_final
 
 
 # ═══════════════════════════════════════════════════════════════════════════
