@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 import shutil
 if TYPE_CHECKING:
     from app.lo.lo_pool import LibreOfficeWorker
-
+from app.config import get_settings
 logger = logging.getLogger(__name__)
 
 # Poppler bin 路徑（由此模組位置計算，不受 CWD 影響）
@@ -102,19 +102,23 @@ def _docx_to_pdf_via_libreoffice(docx_path: Path, output_dir: Path, timeout_seco
             shutil.rmtree(lo_profile, ignore_errors=True)
 
 
-def _pdf_to_image_pages(pdf_path: Path) -> list[dict[str, str]]:
+def _pdf_to_image_pages(pdf_path: Path, dpi: int | None = None) -> list[dict[str, str]]:
     """同步：將 PDF 的每一頁轉為 JPEG base64 dict（於 executor 中呼叫）。"""
     from pdf2image import convert_from_path  # type: ignore[import]
+    from app.config import get_settings
+
+    settings = get_settings()
+    effective_dpi = dpi if dpi is not None else (settings.vlm_dpi or 150)
 
     pages = convert_from_path(
         str(pdf_path),
-        dpi=200,
+        dpi=effective_dpi,
         poppler_path=str(POPPLER_BIN_PATH),
     )
     result: list[dict[str, str]] = []
     for page in pages:
         buf = io.BytesIO()
-        page.save(buf, format="JPEG", quality=85)
+        page.save(buf, format="JPEG", quality=80, optimize=True)
         b64 = base64.b64encode(buf.getvalue()).decode("ascii")
         result.append({"content_b64": b64, "mime_type": "image/jpeg"})
     return result
@@ -186,8 +190,12 @@ async def expand_to_image_pages(
             logger.info("[file_utils] [LibreOffice完成] PDF 產出路徑=%s  LibreOffice耗時=%.1f ms", pdf_path.name, t_lo_elapsed)
 
             t_img_start = asyncio.get_event_loop().time()
-            logger.info("[file_utils] [Poppler] 開始將 PDF 逐頁渲染為 JPEG 影像 (DPI=200)...")
-            pages = await loop.run_in_executor(None, _pdf_to_image_pages, pdf_path)
+
+
+            settings = get_settings()
+            vlm_dpi = settings.vlm_dpi or 150
+            logger.info("[file_utils] [Poppler] 開始將 PDF 逐頁渲染為 JPEG 影像 (DPI=%d)...", vlm_dpi)
+            pages = await loop.run_in_executor(None, _pdf_to_image_pages, pdf_path, vlm_dpi)
             t_img_elapsed = (asyncio.get_event_loop().time() - t_img_start) * 1000
             logger.info("[file_utils] [Poppler完成] 總頁數=%d 頁  影像渲染耗時=%.1f ms", len(pages), t_img_elapsed)
 

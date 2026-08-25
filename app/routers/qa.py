@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.dependencies import get_db_session
-from app.schemas.breakdown import BreakdownItem
+from app.schemas.breakdown import BreakdownItem, BreakdownSectionDetail
 from app.schemas.qa import (
     AskRequest, AskResponse, ReferenceSource, KnowledgeReferenceSource,
     IngestRequest, IngestResponse, IngestItemResult,
@@ -518,7 +518,7 @@ async def ingest_questionnaire_endpoint(
 
 @router.post(
     "/breakdown",
-    response_model=list[BreakdownItem],
+    response_model=list[dict[str, BreakdownSectionDetail]],
     summary="問卷檔案題目萃取",
     description=(
         "上傳問卷原始檔案，透過 MarkItDown 轉換與 LLM 語義萃取，自動識別並輸出結構化題號與英文題目清單。\n\n"
@@ -529,14 +529,15 @@ async def ingest_questionnaire_endpoint(
         "3. **檔案轉換**：以 MarkItDown 將文件轉換為 Markdown 文字（非同步執行，不阻塞事件循環）。\n"
         "4. **LLM 語義萃取**：滑動視窗切塊後，使用 LLM 識別「點分十進位題號」與「純英文題目文字」。\n"
         "5. **清理暫存檔**：無論成功或失敗均自動刪除暫存檔。\n\n"
+        "**回應格式：** 以區塊/Part 為單位的階層化結構，每個區塊包含 `depiction`（前言說明）與 `question`（題目列表）。\n\n"
         "**題號格式範例：** `1`、`1.1`、`2.2.1`、`1.2.4.a`\n\n"
         "**注意事項：**\n"
         "- 若 LLM 解析失敗，回傳 HTTP 502。\n"
         "- 上傳檔案大小建議不超過 50 MB，否則處理時間可能較長。"
     ),
-    response_description="萃取結果清單，每筆包含點分十進位題號（`question_id`）與純英文題目內容（`question_text`）。",
+    response_description="以區塊/Part 為單位的結構化萃取結果，每個區塊包含 `depiction`（前言說明）與 `question`（題目列表）。",
     responses={
-        200: {"description": "萃取成功，回傳 BreakdownItem 陣列"},
+        200: {"description": "萃取成功，回傳區塊分組的題目結構"},
         415: {"description": "不支援的檔案格式"},
         422: {"description": "Markdown 轉換失敗或格式無效"},
         502: {"description": "LLM 解析題目失敗"},
@@ -545,7 +546,7 @@ async def ingest_questionnaire_endpoint(
 async def breakdown_questionnaire(
     file: UploadFile,
     request: Request,
-) -> list[BreakdownItem]:
+) -> list[dict[str, BreakdownSectionDetail]]:
     # ── 1. 驗證副檔名 ─────────────────────────────────────────────────────
     filename = file.filename or ""
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
@@ -638,8 +639,32 @@ async def breakdown_questionnaire(
                 logger.warning("Breakdown：暫存檔刪除發生未預期錯誤 — 路徑=%s, 錯誤=%s", tmp_path, e)
 
     elapsed_ms = (time.perf_counter() - start) * 1000
+
+    # ── 6. 統一輸出格式：區塊分組結構 ────────────────────────────────────
+    if settings.breakdown_engine == "langgraph":
+        # LangGraph 已回傳區塊分組格式
+        result = []
+        for section_block in items:
+            if isinstance(section_block, dict):
+                converted_block = {}
+                for sec_name, sec_detail in section_block.items():
+                    if isinstance(sec_detail, dict):
+                        raw_qs = sec_detail.get("question", sec_detail.get("questions", []))
+                        converted_block[sec_name] = BreakdownSectionDetail(
+                            depiction=sec_detail.get("depiction", ""),
+                            question=[BreakdownItem(**q) for q in raw_qs],
+                        )
+                if converted_block:
+                    result.append(converted_block)
+        total_q = sum(len(sd.question) for block in result for sd in block.values())
+    else:
+        # 傳統引擎（v1/v2/vlm）回傳扁平 list → 封裝為 General 區塊
+        questions = [BreakdownItem(**item) for item in items]
+        result = [{"General": BreakdownSectionDetail(depiction="", question=questions)}]
+        total_q = len(questions)
+
     logger.info(
-        "Breakdown 端點完成：檔名=%s  萃取題目=%d 筆  耗時=%.1f ms",
-        filename, len(items), elapsed_ms,
+        "Breakdown 端點完成：檔名=%s  區塊數=%d  萃取題目=%d 筆  耗時=%.1f ms",
+        filename, len(result), total_q, elapsed_ms,
     )
-    return [BreakdownItem(**item) for item in items]
+    return result

@@ -35,6 +35,19 @@ def _load_items(path: Path) -> list[dict]:
     return data
 
 
+def _flatten_items(items: list) -> list[dict]:
+    flat = []
+    for item in items:
+        if isinstance(item, dict):
+            if "question_id" in item:
+                flat.append(item)
+            else:
+                for sec_detail in item.values():
+                    if isinstance(sec_detail, dict) and "question" in sec_detail:
+                        flat.extend(sec_detail["question"])
+    return flat
+
+
 def evaluate(input_path: Path, expected_path: Path, mode: str = "structured") -> dict:
     started_at = time.perf_counter()
     conversion_started_at = time.perf_counter()
@@ -54,7 +67,8 @@ def evaluate(input_path: Path, expected_path: Path, mode: str = "structured") ->
     else:
         actual_items = extract_structured_questions(markdown)
     extraction_ms = (time.perf_counter() - extraction_started_at) * 1000
-    expected_items = _load_items(expected_path)
+    actual_items = _flatten_items(actual_items)
+    expected_items = _flatten_items(_load_items(expected_path))
 
     actual_by_id = {str(item["question_id"]): str(item["question_text"]) for item in actual_items}
     expected_by_id = {str(item["question_id"]): str(item["question_text"]) for item in expected_items}

@@ -610,3 +610,29 @@ class CrossChunkNumberingStateTests(unittest.TestCase):
             'kind="inline_subitem"',
             prompt,
         )
+
+
+class QaBreakdownRouterTests(unittest.TestCase):
+    def test_breakdown_section_detail_questions_and_question_alias(self) -> None:
+        from app.schemas.breakdown import BreakdownSectionDetail, BreakdownQuestion
+
+        detail = BreakdownSectionDetail(
+            depiction="Sample depiction",
+            question=[
+                BreakdownQuestion(question_id="1.1", question_text="Question text")
+            ]
+        )
+        self.assertEqual(len(detail.question), 1)
+        self.assertEqual(len(detail.questions), 1)
+        self.assertEqual(detail.question[0].question_id, "1.1")
+
+        # Test initializing with questions keyword
+        detail2 = BreakdownSectionDetail(
+            depiction="Sample depiction 2",
+            questions=[
+                BreakdownQuestion(question_id="1.2", question_text="Question text 2")
+            ]
+        )
+        self.assertEqual(len(detail2.question), 1)
+        self.assertEqual(len(detail2.questions), 1)
+        self.assertEqual(detail2.question[0].question_id, "1.2")

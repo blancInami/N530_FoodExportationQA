@@ -31,13 +31,28 @@ def _load_items(path: Path) -> list[dict]:
     return data
 
 
+def _flatten_items(items: list) -> list[dict]:
+    flat = []
+    for item in items:
+        if isinstance(item, dict):
+            if "question_id" in item:
+                flat.append(item)
+            else:
+                for sec_detail in item.values():
+                    if isinstance(sec_detail, dict) and "question" in sec_detail:
+                        flat.extend(sec_detail["question"])
+    return flat
+
+
 async def evaluate(input_path: Path, expected_path: Path) -> dict:
     started_at = time.perf_counter()
     file_bytes = input_path.read_bytes()
 
     # 1. 執行 LangGraph 擬人化解析
-    actual_items = await extract_questions_langgraph(file_bytes, input_path.name)
-    expected_items = _load_items(expected_path)
+    raw_actual_items = await extract_questions_langgraph(file_bytes, input_path.name)
+    actual_items = _flatten_items(raw_actual_items)
+    raw_expected = _load_items(expected_path)
+    expected_items = _flatten_items(raw_expected)
 
     # 2. 比對指標
     actual_by_id = {str(item["question_id"]): str(item["question_text"]) for item in actual_items}
