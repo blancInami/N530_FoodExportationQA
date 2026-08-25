@@ -317,13 +317,16 @@ def build_page_section_map(
         raw_valid.append(out_item)
         page_map[p_int].append(out_item)
 
-        # 守門防禦：嚴格過濾無效與題目級別代號（如 'None', 'G.72', 'II.1.(a)'）
+        # 守門防禦：嚴格過濾無效、純題號與問句內容（如 'None', 'B.1', 'G.72', 'II.1.(a)', 'Please indicate...'）
         is_invalid_sec = (
             not clean_sid
             or clean_sid.lower() in ["none", "null", "general", "n/a"]
             or bool(re.search(r"\([a-z0-9]+\)", clean_sid, re.IGNORECASE))
+            or bool(re.match(r"^[A-Z]\.\d+$", clean_sid))
             or bool(re.match(r"^[A-Z]\.\d{2,}$", clean_sid))
             or clean_sid.count(".") >= 2
+            or any(kw in raw_title.lower() for kw in ["please indicate", "please describe", "please provide", "are there", "is there", "do you have"])
+            or raw_title.strip().endswith("?")
         )
 
         if not is_invalid_sec:

@@ -2,17 +2,19 @@
 你正在逐頁閱讀問卷影像。你擁有全篇階層大綱地圖導航（Page Pre-Indexed Sections）與層級標題棧（Heading Stack）。
 
 【視覺色彩、樣式特徵與語意分析準則 (LLM-First Semantic Rules)】
-1. 區塊/章節橫幅容器判定（Section/Block Header Detection）：
-   - 【視覺特徵】：橫跨全寬的深色/彩色背景條（如深藍底白字、深灰底、淺色色帶條）、特大粗體字、置中橫幅（Banner）（例如 "SECTION B - GENERAL INFORMATION" 或 "PART I: GENERAL REQUIREMENTS"）。
+1. 區塊/主章節與子章節橫幅容器判定（Section/Sub-chapter Header Detection）：
+   - 【視覺特徵】：橫跨全寬的深色/彩色背景條（如深藍底白字、深灰底、淺色色帶條）、特大粗體字、置中橫幅（Banner）、次級粗體小節標題條（例如 "SECTION B - GENERAL INFORMATION" 或 "PART I: GENERAL REQUIREMENTS" 或 "C.A Competent authority A"）。
+   - 【同頁多章節/子章節支援】：本頁中若出現 1 個或多個章節/子章節橫幅（例如上方為 C.A，中段出現 C.B），請將本頁所見的所有新章節橫幅依序放入 "detected_new_chapters" 陣列中！
    - 【語意職責分離】：
-     - "id": 純化章節代號（例如 "B", "Part A", "Chapter II", "1", "Section 1"），絕不包含領域標題或長文字！
-     - "title": 領域標題（例如 "General Information", "Competent authority(ies)"），不包含代號前綴。
-     - "depiction": 該章節橫幅標題與第一道題目之間的【領域名稱與前言說明全文】（例如 "Competent authority(ies)" 或 "General Information\n\nThis section applies to official controls..."）。【極重要】：絕對禁止將題目問句（如 Please indicate...）或需要填答之內容納入 depiction！
-     - "first_question_id": 該新章節下的第一道題號（如 "B.1"），便於同頁精準切分（無則空字串 ""）。
-   - 【處理方式】：將其填入 "detected_new_chapter"，【絕對不可作為題目萃取】！
-2. 實質問卷題目判定（Question Extraction）與同頁多區塊標記：
-   - 【視覺與語意特徵】：具有清晰題號（如 "B.1", "B.2", "1.1", "(a)"）、白底或常規表格儲存格、實質詢問問句（"Please indicate...", "Describe the...", "Are there mechanisms..."）、Yes/No 勾選方框（[ ]）或實質數據表格。
-   - 【同頁跨區塊精準標記】：若本頁中段出現新章節橫幅，橫幅**上方**的題目所屬章節請標註於 "section_id"（例如 "A"），橫幅**下方**的題目請標註新章節代號（例如 "section_id": "B"）。
+     - "id": 純化章節代號（例如 "B", "C.A", "C.B", "Part A", "Chapter II", "1", "1.1"），絕不包含領域標題或長文字！
+     - "title": 領域標題（例如 "General Information", "Competent authority A"），不包含代號前綴。
+     - "depiction": 該章節橫幅標題與第一道題目之間的【領域名稱與前言說明全文】（例如 "Competent authority A\n\nThis sub-section applies to official controls..."）。【極重要】：絕對禁止將題目問句（如 Please indicate...）或需要填答之內容納入 depiction！
+     - "first_question_id": 該新章節下的第一道題號（如 "B.1", "C.A.1"），便於同頁精準切分（無則空字串 ""）。
+     - "position": 該章節橫幅在頁面上的垂直位置（"top", "middle", "bottom"）。
+   - 【處理方式】：填入 "detected_new_chapters" 陣列，【絕對不可作為題目萃取】！若本頁無任何新章節橫幅，則填空陣列 []。
+2. 實質問卷題目判定（Question Extraction）與題目所屬區塊標記：
+   - 【視覺與語意特徵】：具有清晰題號（如 "B.1", "B.2", "1.1", "(a)", "C.A.1"）、白底或常規表格儲存格、實質詢問問句（"Please indicate...", "Describe the...", "Are there mechanisms..."）、Yes/No 勾選方框（[ ]）或實質數據表格。
+   - 【題目所屬區塊精準標記】：請根據題目在頁面上的視覺版面位置，在每道題目的 "section_id" 欄位直接填入所屬之章節/子章節代號（例如上方題目填 "C.A"，下方題目填 "C.B"）。
    - 【處理方式】：提取至 "extracted_questions"。
 3. 表格欄位表頭雜訊剔除（Table Column Header Rejection）：
    - 表格頂部的深色或灰底欄位標題（如 "No.", "Question", "Competent Authority Response", "Remarks"）屬於版面結構雜訊，【嚴格剔除，禁止萃取為題目】。
@@ -25,7 +27,7 @@
 
 【職責 2：實質問卷題目萃取、題號分離、HTML 轉換與同題融合規範】
 - 僅萃取「需要受查國填答/說明」之實質題目（回答 Yes/No、提供數據、說明制度、填寫實質表格）。
-- 題號必須扁平化展開（如 "B.1", "II.1.a.i"），完整繼承章節與父題號。
+- 題號必須扁平化展開（如 "B.1", "II.1.a.i", "C.A.1"），完整繼承章節與父題號。
 - 題號與題幹絕對分離原則：
   1. "question_id" 專門存放完整題號（如 "B.1", "1.1", "II.1.a", "Eligibility.1", "C.B.25"）。
   2. "question_text" 絕對不可包含任何題號前綴（例如嚴禁在 question_text 開頭重複寫 "B.1 ", "1.1 ", "1.1.", "II.1.a", "(1)", "(a)", "Q1:", "Chapter I.1" 等題號字樣）。
@@ -52,17 +54,20 @@
 【輸出約束】
 - 輸出合法的 JSON Object：
   {
-    "detected_new_chapter": {
-      "id": "純化章節代號 (字串，如 B, Part A, Chapter II, 1)",
-      "title": "領域標題 (字串，如 General Information, Competent authority(ies))",
-      "depiction": "該章節領域標題與前言說明全文（無則空字串 \"\"）",
-      "first_question_id": "新章節的第一道題號（如 B.1，無則 \"\"）"
-    } 或 null,
+    "detected_new_chapters": [
+      {
+        "id": "純化章節代號 (字串，如 B, C.A, C.B, Part A, 1)",
+        "title": "領域標題 (字串，如 General Information, Competent authority A)",
+        "depiction": "該章節領域標題與前言說明全文（無則空字串 \"\"）",
+        "first_question_id": "新章節的第一道題號（如 B.1, C.A.1，無則 \"\"）",
+        "position": "頁面位置 (top / middle / bottom)"
+      }
+    ],
     "extracted_questions": [
       {
-        "question_id": "完整扁平化題號 (字串，如 B.1 或 II.1.a)",
+        "question_id": "完整扁平化題號 (字串，如 B.1, C.A.1 或 II.1.a)",
         "question_text": "純題目內容與語意 HTML 表格/選項 (不含題號前綴)",
-        "section_id": "本題所屬章節代號 (如 B，同頁跨區塊時特別標註)"
+        "section_id": "本題所屬章節代號 (字串，如 B, C.A, C.B)"
       }
     ],
     "pending_context": "本頁底部未完結題幹/表格列碎片 (無則 \"\")",

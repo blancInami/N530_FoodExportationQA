@@ -211,6 +211,21 @@ class LangGraphHelperTests(unittest.TestCase):
         self.assertEqual(len(page_map[4]), 1)
         self.assertEqual(page_map[4][0]["section_id"], "B")
 
+    def test_build_page_section_map_filters_out_question_like_toc_items(self):
+        """測試 build_page_section_map 嚴格過濾誤入目錄之題號 (如 B.1) 與問句，避免污染 section_order。"""
+        fake_outline = [
+            {"page": 1, "section_id": "B.1", "title": "Please indicate the competent authority name:", "is_major_section": True},
+            {"page": 1, "section_id": "B.2", "title": "Please provide organization chart?", "is_major_section": True},
+            {"page": 2, "section_id": "C", "title": "Competent Authority", "is_major_section": True, "depiction": "Official control"},
+        ]
+        page_map, global_tree, section_order, section_depictions = build_page_section_map(fake_outline, 3)
+
+        # 驗證 B.1 與 B.2 均被排除，section_order 只有合法章節 C
+        self.assertNotIn("B.1", section_order)
+        self.assertNotIn("B.2", section_order)
+        self.assertIn("C", section_order)
+        self.assertEqual(section_order, ["C"])
+
     def test_reorder_sections_by_physical_page(self):
         """測試 reorder_sections_by_physical_page 嚴格根據實體物理頁碼與位置排序章節。"""
         outline_tree = [
@@ -923,3 +938,85 @@ if __name__ == "__main__":
         c_b_questions = result[2]["C.B"]["questions"]
         c_b_qids = [q["question_id"] for q in c_b_questions]
         self.assertEqual(c_b_qids, ["C.B.1"])
+
+    @patch("app.services.breakdown_langgraph.expand_to_image_pages", new_callable=AsyncMock)
+    @patch("app.services.breakdown_langgraph.chat_completion_vision", new_callable=AsyncMock)
+    @patch("app.services.breakdown_langgraph.chat_completion", new_callable=AsyncMock)
+    async def test_same_page_multiple_subsections_with_independent_depictions(self, mock_chat, mock_vision, mock_expand):
+        """
+        測試當同一頁面影像中出現多個子章節橫幅 (detected_new_chapters: [C.A, C.B]) 時：
+        1. 系統一次性註冊 C.A 與 C.B，並分別保留各自獨立的前言說明 (Depiction)。
+        2. 題目依據 VLM 標註之 section_id (或題號) 精準歸入所屬子章節。
+        3. 最終輸出獨立的 C.A 與 C.B 區塊，前言與題目各自獨立。
+        """
+        mock_expand.return_value = [
+            {"content_b64": "p1_img", "mime_type": "image/jpeg"},
+        ]
+
+        mock_vision.side_effect = [
+            # 1. TOC indexer: 目錄僅回報大項 C
+            json.dumps([
+                {"page": 1, "section_id": "C", "title": "Competent Authority", "position": "top", "is_major_section": True, "depiction": "General Authority Oversight"},
+            ]),
+            # 2. Page 1: 同頁同時出現 C.A (頂部) 與 C.B (中段) 兩個獨立子章節橫幅
+            json.dumps({
+                "detected_new_chapters": [
+                    {
+                        "id": "C.A",
+                        "title": "Central Competent Authority",
+                        "depiction": "Central authority is responsible for national policy.",
+                        "first_question_id": "C.A.1",
+                        "position": "top"
+                    },
+                    {
+                        "id": "C.B",
+                        "title": "Regional Competent Authority",
+                        "depiction": "Regional authorities execute inspections locally.",
+                        "first_question_id": "C.B.1",
+                        "position": "middle"
+                    }
+                ],
+                "extracted_questions": [
+                    {"question_id": "C.A.1", "question_text": "Please indicate central authority contact:", "section_id": "C.A"},
+                    {"question_id": "C.A.2", "question_text": "Please provide central organizational chart:", "section_id": "C.A"},
+                    {"question_id": "C.B.1", "question_text": "Please indicate regional offices:", "section_id": "C.B"},
+                ],
+                "pending_context": "",
+                "active_chapter": "C.B",
+                "request_back_read": False,
+            }),
+        ]
+
+        # Reducer: 接收 C.A 與 C.B 兩個獨立區塊平行審查
+        mock_chat.side_effect = [
+            # C.A
+            json.dumps([{"section_name": "C.A", "depiction": "Central authority is responsible for national policy.", "questions": [
+                {"question_id": "C.A.1", "question_text": "Please indicate central authority contact:"},
+                {"question_id": "C.A.2", "question_text": "Please provide central organizational chart:"},
+            ]}]),
+            # C.B
+            json.dumps([{"section_name": "C.B", "depiction": "Regional authorities execute inspections locally.", "questions": [
+                {"question_id": "C.B.1", "question_text": "Please indicate regional offices:"},
+            ]}]),
+        ]
+
+        fake_docx_bytes = b"PK  fake_bytes"
+        result = await extract_questions_langgraph(fake_docx_bytes, "multi_chapter_page_test.docx")
+
+        # 驗證產出 2 個獨立區塊 C.A 與 C.B
+        self.assertEqual(len(result), 2)
+        sec_names = [list(block.keys())[0] for block in result]
+        self.assertEqual(sec_names, ["C.A", "C.B"])
+
+        # 驗證 C.A 專屬前言與題目
+        ca_block = result[0]["C.A"]
+        self.assertIn("Central authority is responsible for national policy", ca_block["depiction"])
+        self.assertEqual(len(ca_block["questions"]), 2)
+        self.assertEqual(ca_block["questions"][0]["question_id"], "C.A.1")
+        self.assertEqual(ca_block["questions"][1]["question_id"], "C.A.2")
+
+        # 驗證 C.B 專屬前言與題目
+        cb_block = result[1]["C.B"]
+        self.assertIn("Regional authorities execute inspections locally", cb_block["depiction"])
+        self.assertEqual(len(cb_block["questions"]), 1)
+        self.assertEqual(cb_block["questions"][0]["question_id"], "C.B.1")

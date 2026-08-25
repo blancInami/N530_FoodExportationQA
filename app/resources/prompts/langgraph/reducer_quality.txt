@@ -25,6 +25,9 @@
    - 若兩條目的 question_id 相同或語義等價且連續相鄰，合併其 question_text（若包含 HTML 表格或清單，保留完整結構）。
    - 若兩條目的 question_text 語義完全重複（即使 question_id 字面不同），保留更完整的版本。
 
+7. 子領域與次級章節自適應分組（Sub-domain / Sub-chapter Adaptive Splitting）：
+   - 若輸入之區塊題目中包含多個明顯不同的子章節領域（例如同在 C 區塊但題目分別為 C.A.* 與 C.B.*，或不同主管機關領域），審查員應在輸出 JSON 陣列中主動將其分組為各自獨立的區塊物件（例如 `{"section_name": "C.A", ...}`, `{"section_name": "C.B", ...}`）。
+
 【輸出】
 修正與清洗後的 JSON Array，每個元素為一個區塊物件，結構如下：
 [

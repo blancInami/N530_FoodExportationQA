@@ -98,7 +98,7 @@ async def toc_indexer_node(state: QuestionnaireState) -> QuestionnaireState:
     sample_pages = pages[:min(3, total)]
     try:
         raw_output = await chat_completion_vision(
-            prompt="請檢視此問卷前置頁面，識別並輸出整份問卷的階層章節大綱樹 (Hierarchical TOC Structure)。若前置頁無目錄頁則盡可能提取所見之章節標題。",
+            prompt="請檢視此問卷前置 1~3 頁影像，判斷是否存在獨立的目錄頁（Table of Contents）。若存在獨立目錄頁，請提取整份問卷的章節大綱階層樹；若無獨立目錄頁（頁面直接為問卷題目或表單），請直接輸出空陣列 []。",
             images=sample_pages,
             system_prompt=LANGGRAPH_TOC_SYSTEM_PROMPT,
             temperature=0,
@@ -231,11 +231,16 @@ async def page_analyzer_node(state: QuestionnaireState) -> QuestionnaireState:
     section_depictions = dict(state.get("section_depictions", {}))
     section_order = list(state.get("section_order", []))
 
-    new_clean_id = ""
-    first_qid_of_new_chap = ""
-    transition_idx = -1
+    last_new_clean_id = ""
+    raw_detected_chaps = res.get("detected_new_chapters", res.get("detected_new_chapter", []))
+    if isinstance(raw_detected_chaps, dict):
+        detected_chaps_list = [raw_detected_chaps] if raw_detected_chaps.get("id") else []
+    elif isinstance(raw_detected_chaps, list):
+        detected_chaps_list = [c for c in raw_detected_chaps if isinstance(c, dict) and c.get("id")]
+    else:
+        detected_chaps_list = []
 
-    if detected_chap and isinstance(detected_chap, dict) and detected_chap.get("id"):
+    for detected_chap in detected_chaps_list:
         calibrated_anchors, is_calibrated, m_msg = calibrate_toc_anchors(
             anchors=anchors,
             current_page=page_no,
@@ -249,11 +254,13 @@ async def page_analyzer_node(state: QuestionnaireState) -> QuestionnaireState:
         chap_id = str(detected_chap.get("id", "")).strip()
         chap_title = str(detected_chap.get("title", "")).strip()
         chap_depiction = str(detected_chap.get("depiction", "")).strip()
-        first_qid_of_new_chap = str(detected_chap.get("first_question_id", "")).strip()
+        chap_pos = str(detected_chap.get("position", "top")).strip().lower()
+        if chap_pos not in ["top", "middle", "bottom", "full_page"]:
+            chap_pos = "top"
 
         clean_id, combined_dep = split_section_id_and_depiction(chap_id, chap_title, chap_depiction)
         if clean_id:
-            new_clean_id = clean_id
+            last_new_clean_id = clean_id
             if clean_id not in section_order:
                 section_depictions[clean_id] = combined_dep
                 new_outline_item: OutlineItem = {
@@ -261,7 +268,7 @@ async def page_analyzer_node(state: QuestionnaireState) -> QuestionnaireState:
                     "subsection_id": clean_id,
                     "title": chap_title or clean_id,
                     "page": page_no,
-                    "position": "middle" if transition_idx != -1 else "top",
+                    "position": chap_pos,
                     "is_major_section": True,
                     "depiction": combined_dep,
                 }
@@ -280,11 +287,12 @@ async def page_analyzer_node(state: QuestionnaireState) -> QuestionnaireState:
                 if section_depictions.get(clean_id, "") not in combined_dep:
                     section_depictions[clean_id] = f"{section_depictions.get(clean_id, '')}\n\n{combined_dep}".strip()
 
-    new_active_chap = new_clean_id or str(res.get("active_chapter", prev_active_chap)).strip() or prev_active_chap
+    new_active_chap = last_new_clean_id or str(res.get("active_chapter", prev_active_chap)).strip() or prev_active_chap
 
     # 逐題精準歸屬
     transition_idx = -1
-    if new_clean_id and new_clean_id != prev_active_chap:
+    if len(detected_chaps_list) == 1 and last_new_clean_id and last_new_clean_id != prev_active_chap:
+        first_qid_of_new_chap = str(detected_chaps_list[0].get("first_question_id", "")).strip()
         if first_qid_of_new_chap:
             for i, q in enumerate(extracted):
                 if q["question_id"].lower() == first_qid_of_new_chap.lower():
@@ -293,15 +301,15 @@ async def page_analyzer_node(state: QuestionnaireState) -> QuestionnaireState:
         if transition_idx == -1:
             for i, q in enumerate(extracted):
                 matched_sec = extract_section_prefix_from_qid(q["question_id"], section_order)
-                if matched_sec == new_clean_id:
+                if matched_sec == last_new_clean_id:
                     transition_idx = i
                     break
-                if q.get("section_id") and match_section_name(q["section_id"], section_order) == new_clean_id:
+                if q.get("section_id") and match_section_name(q["section_id"], section_order) == last_new_clean_id:
                     transition_idx = i
                     break
 
     for i, q in enumerate(extracted):
-        is_after_transition = (transition_idx != -1 and i >= transition_idx) or (transition_idx == -1 and bool(new_clean_id))
+        is_after_transition = (transition_idx != -1 and i >= transition_idx) or (transition_idx == -1 and bool(last_new_clean_id))
         assigned_section = resolve_question_section(
             q=q,
             page_prev_section=prev_active_chap,
