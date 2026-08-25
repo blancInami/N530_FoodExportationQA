@@ -6,12 +6,16 @@ import io
 import logging
 import subprocess
 import tempfile
+import datetime
+import hashlib
+import json
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 import shutil
 if TYPE_CHECKING:
     from app.lo.lo_pool import LibreOfficeWorker
-from app.config import get_settings
+from app.config import Settings, get_settings
 logger = logging.getLogger(__name__)
 
 # Poppler bin 路徑（由此模組位置計算，不受 CWD 影響）
@@ -124,6 +128,66 @@ def _pdf_to_image_pages(pdf_path: Path, dpi: int | None = None) -> list[dict[str
     return result
 
 
+def _try_load_cached_images(file_md5: str, settings: Settings) -> list[dict[str, str]] | None:
+    """若啟用 vlm_save_temp_images 且 temp_images/{file_md5}/ 存在完整圖片，直接讀取快取。"""
+    if not getattr(settings, "vlm_save_temp_images", False):
+        return None
+    cache_dir = Path(getattr(settings, "vlm_temp_images_dir", "temp_images")) / file_md5
+    if not cache_dir.is_dir():
+        return None
+
+    img_files = sorted(
+        cache_dir.glob("page_*.jp*g"),
+        key=lambda p: int(re.search(r"page_(\d+)", p.stem).group(1)) if re.search(r"page_(\d+)", p.stem) else p.name,
+    )
+    if not img_files:
+        return None
+
+    pages: list[dict[str, str]] = []
+    for f in img_files:
+        b64 = base64.b64encode(f.read_bytes()).decode("ascii")
+        pages.append({"content_b64": b64, "mime_type": "image/jpeg"})
+
+    logger.info("[file_utils] [Cache Hit] 命中 MD5 快取 (%s)，直接從暫存資料夾載入 %d 頁影像！", file_md5, len(pages))
+    return pages
+
+
+def _save_cached_images(
+    file_md5: str,
+    pages: list[dict[str, str]],
+    raw_pdf_path: Path | None,
+    filename: str,
+    settings: Settings,
+) -> None:
+    """若啟用 vlm_save_temp_images，將轉檔後的 JPEG 圖片與中介 PDF 保存至 temp_images/{file_md5}/。"""
+    if not getattr(settings, "vlm_save_temp_images", False) or not pages:
+        return
+    try:
+        cache_dir = Path(getattr(settings, "vlm_temp_images_dir", "temp_images")) / file_md5
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        for idx, page in enumerate(pages, start=1):
+            img_path = cache_dir / f"page_{idx:03d}.jpg"
+            img_bytes = base64.b64decode(page["content_b64"])
+            img_path.write_bytes(img_bytes)
+
+        if raw_pdf_path and raw_pdf_path.exists():
+            target_pdf = cache_dir / "converted.pdf"
+            shutil.copy2(raw_pdf_path, target_pdf)
+
+        meta_path = cache_dir / "meta.json"
+        meta_info = {
+            "file_md5": file_md5,
+            "filename": filename,
+            "total_pages": len(pages),
+            "created_at": datetime.datetime.now().isoformat(),
+        }
+        meta_path.write_text(json.dumps(meta_info, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info("[file_utils] [Cache Save] 已將 %d 頁轉檔影像儲存至 MD5 快取資料夾：%s", len(pages), cache_dir)
+    except Exception as e:
+        logger.warning("[file_utils] [Cache Save 異常] 儲存快取影像失敗：%s", e)
+
+
 async def expand_to_image_pages(
     raw: bytes,
     mime_type: str,
@@ -151,6 +215,14 @@ async def expand_to_image_pages(
     Returns:
         list of dicts，每個 dict 包含 ``content_b64`` 與 ``mime_type``。
     """
+    settings = get_settings()
+    file_md5 = hashlib.md5(raw).hexdigest()
+
+    # 優先嘗試 MD5 快取命中
+    cached = _try_load_cached_images(file_md5, settings)
+    if cached is not None:
+        return cached
+
     loop = asyncio.get_event_loop()
     ext = Path(filename).suffix.lower()
 
@@ -162,6 +234,7 @@ async def expand_to_image_pages(
             pdf_path = Path(tmp) / "input.pdf"
             pdf_path.write_bytes(raw)
             pages = await loop.run_in_executor(None, _pdf_to_image_pages, pdf_path)
+            _save_cached_images(file_md5, pages, pdf_path, filename, settings)
         elapsed = (asyncio.get_event_loop().time() - t0) * 1000
         logger.info("[file_utils] [PDF轉檔完成] 檔名=%s  總頁數=%d 頁  耗時=%.1f ms", filename, len(pages), elapsed)
         return pages
@@ -191,13 +264,13 @@ async def expand_to_image_pages(
 
             t_img_start = asyncio.get_event_loop().time()
 
-
-            settings = get_settings()
             vlm_dpi = settings.vlm_dpi or 150
             logger.info("[file_utils] [Poppler] 開始將 PDF 逐頁渲染為 JPEG 影像 (DPI=%d)...", vlm_dpi)
             pages = await loop.run_in_executor(None, _pdf_to_image_pages, pdf_path, vlm_dpi)
             t_img_elapsed = (asyncio.get_event_loop().time() - t_img_start) * 1000
             logger.info("[file_utils] [Poppler完成] 總頁數=%d 頁  影像渲染耗時=%.1f ms", len(pages), t_img_elapsed)
+
+            _save_cached_images(file_md5, pages, pdf_path, filename, settings)
 
         total_elapsed = (asyncio.get_event_loop().time() - t0) * 1000
         logger.info("[file_utils] [Office全流程完成] 檔名=%s  總頁數=%d 頁  總耗時=%.1f ms", filename, len(pages), total_elapsed)
@@ -207,7 +280,9 @@ async def expand_to_image_pages(
     if ext in _IMAGE_EXT_TO_MIME:
         corrected_mime = _IMAGE_EXT_TO_MIME[ext]
         logger.debug("[file_utils] 圖片附件（%s mime=%s）：%s", ext, corrected_mime, filename)
-        return [{"content_b64": base64.b64encode(raw).decode("ascii"), "mime_type": corrected_mime}]
+        pages = [{"content_b64": base64.b64encode(raw).decode("ascii"), "mime_type": corrected_mime}]
+        _save_cached_images(file_md5, pages, None, filename, settings)
+        return pages
 
     # ── 其他格式：原樣回傳 ───────────────────────────────────────────────────
     logger.warning(

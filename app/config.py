@@ -72,6 +72,14 @@ class Settings(BaseSettings):
     vlm_max_concurrency: int = 4
     vlm_dpi: int = 150
     vlm_input_mode: str = "images"  # "images" (PDF -> Poppler JPEG) | "pdf_direct" (direct PDF base64)
+    vlm_save_temp_images: bool = Field(
+        default=False,
+        description="是否啟用 VLM 轉檔圖片暫存快取（以檔案 MD5 保存與重用影像）",
+    )
+    vlm_temp_images_dir: str = Field(
+        default="temp_images",
+        description="保留 VLM 轉檔圖片的快取根目錄路徑",
+    )
 
     # Logging
     log_level: str = "INFO"
