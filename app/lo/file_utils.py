@@ -13,14 +13,35 @@ import re
 from pathlib import Path
 import shutil
 from app.config import Settings, get_settings
-from app.lo.lo_pool import LibreOfficeWorker, get_lo_pool
+from app.lo.lo_pool import LibreOfficeWorker, get_lo_pool, resolve_lo_program_dir
 logger = logging.getLogger(__name__)
 
-# Poppler bin 路徑（由此模組位置計算，不受 CWD 影響）
-POPPLER_BIN_PATH: Path = Path(__file__).parent.parent.parent / "tools"  / "poppler" / "bin"
+_PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent.parent
+# 未設定 POPPLER_DIR 時的預設 Poppler 目錄
+_DEFAULT_POPPLER_DIR: Path = _PROJECT_ROOT / "tools" / "poppler"
 
-# LibreOffice Portable soffice.exe 路徑
-SOFFICE_PATH: Path =  Path(__file__).parent.parent.parent / "tools" / "LibreOfficePortable" / "App" / "libreoffice" / "program" / "soffice.exe"
+
+def resolve_poppler_bin_dir(poppler_dir: str = "") -> Path:
+    """解析 Poppler 的 bin 目錄（pdftoppm.exe / pdfinfo.exe 所在處）。
+
+    poppler_dir 為空時使用 tools/poppler；相對路徑以專案根目錄為基準
+    （NSSM 服務的工作目錄不一定是專案目錄）。依序嘗試下列結構，取第一個含 pdftoppm.exe 者：
+
+    - ``{dir}/Library/bin``：官方 Windows release zip（poppler-xx.xx.x/Library/bin）
+    - ``{dir}/bin``
+    - ``{dir}``：直接指定 bin 目錄
+
+    皆不存在時回傳 ``{dir}/bin``，供呼叫端產生錯誤訊息。
+    """
+    raw = (poppler_dir or "").strip()
+    base = Path(raw).expanduser() if raw else _DEFAULT_POPPLER_DIR
+    if not base.is_absolute():
+        base = _PROJECT_ROOT / base
+    for cand in (base / "Library" / "bin", base / "bin", base):
+        if (cand / "pdftoppm.exe").exists():
+            return cand
+    return base / "bin"
+
 
 
 _PDF_MIME = "application/pdf"
@@ -52,8 +73,9 @@ def _docx_to_pdf_via_libreoffice(docx_path: Path, output_dir: Path, timeout_seco
 
     LibreOffice 會在 output_dir 下產生與 docx_path 同名、副檔名為 .pdf 的檔案。
     """
-    if not SOFFICE_PATH.exists():
-        raise FileNotFoundError(f"找不到 LibreOffice 執行檔：{SOFFICE_PATH}")
+    soffice_path = resolve_lo_program_dir(get_settings().libreoffice_dir) / "soffice.exe"
+    if not soffice_path.exists():
+        raise FileNotFoundError(f"找不到 LibreOffice 執行檔：{soffice_path}（請確認 LIBREOFFICE_DIR 設定）")
     
     output_dir.mkdir(parents=True, exist_ok=True)
     
@@ -66,7 +88,7 @@ def _docx_to_pdf_via_libreoffice(docx_path: Path, output_dir: Path, timeout_seco
     try:
         process = subprocess.run(
             [
-                str(SOFFICE_PATH),
+                str(soffice_path),
                 f"-env:UserInstallation=file:///{lo_profile.as_posix()}",
                 "--headless",
                 "--invisible",
@@ -111,11 +133,14 @@ def _pdf_to_image_pages(pdf_path: Path, dpi: int | None = None) -> list[dict[str
 
     settings = get_settings()
     effective_dpi = dpi if dpi is not None else (settings.vlm_dpi or 150)
+    poppler_bin = resolve_poppler_bin_dir(settings.poppler_dir)
+    if not (poppler_bin / "pdftoppm.exe").exists():
+        raise FileNotFoundError(f"找不到 Poppler 執行檔：{poppler_bin / 'pdftoppm.exe'}（請確認 POPPLER_DIR 設定）")
 
     pages = convert_from_path(
         str(pdf_path),
         dpi=effective_dpi,
-        poppler_path=str(POPPLER_BIN_PATH),
+        poppler_path=str(poppler_bin),
     )
     result: list[dict[str, str]] = []
     for page in pages:

@@ -74,8 +74,8 @@
 - PostgreSQL with `pgvector` extension installed，或 SQL Server 2025（原生 `VECTOR` 型別）
 - Embedding Server & LLM Server running (see `.env`)
 - `vlm` / `langgraph` 解析引擎需另行放置以下外部工具（皆不入版控，見 `.gitignore`）：
-  - `tools/poppler/bin/`：Poppler for Windows（PDF → JPEG）
-  - `tools/LibreOfficePortable/`：LibreOffice Portable（Office → PDF）
+  - `tools/poppler/bin/`：Poppler for Windows（PDF → JPEG）；亦可放在其他位置，以 `POPPLER_DIR` 指定路徑
+  - `tools/LibreOfficePortable/`：LibreOffice Portable（Office → PDF）；亦可改用既有安裝，以 `LIBREOFFICE_DIR` 指定路徑
 
 ### 2. 建立虛擬環境並安裝依賴
 
@@ -155,6 +155,8 @@ cp .env.sample .env
 | `VLM_INPUT_MODE` | `images` | `images`（轉 JPEG）/ `pdf_direct`（直傳 PDF base64） |
 | `VLM_SAVE_TEMP_IMAGES` | `false` | 以檔案 MD5 快取轉檔後的逐頁影像，相同檔案再次上傳時跳過轉檔 |
 | `VLM_TEMP_IMAGES_DIR` | `temp_images` | 影像快取根目錄（`{dir}/{md5}/page_001.jpg …`） |
+| `POPPLER_DIR` | 空字串 | Poppler 資料夾路徑；空字串使用 `tools/poppler`。可指定官方 Windows release 根目錄（含 `Library/bin`，如 `C:/poppler-24.08.0`）、含 `bin/` 的目錄或直接指定 `bin` 目錄（須含 `pdftoppm.exe`）；相對路徑以專案根目錄為基準 |
+| `LIBREOFFICE_DIR` | 空字串 | LibreOffice 資料夾路徑；空字串使用 `tools/LibreOfficePortable`。可指定 Portable 根目錄（含 `App/libreoffice/program`）、一般安裝目錄（如 `C:/Program Files/LibreOffice`，含 `program/`）或直接指定 `program` 目錄；相對路徑以專案根目錄為基準 |
 | `LO_POOL_SIZE` | `0` | LibreOffice 常駐 Worker 數量；`0` 停用，每次轉檔冷啟動 `soffice.exe`（見下方說明） |
 | `LO_BASE_PORT` | `2000` | Worker UNO 監聽埠基準值；`worker_i` 使用 `LO_BASE_PORT+i+1` |
 | `LO_MAX_CONVERSIONS` | `50` | 單一 Worker 轉檔次數上限，達上限自動回收重啟以釋放記憶體 |
@@ -163,7 +165,7 @@ cp .env.sample .env
 
 #### LibreOffice 常駐 Worker 池（`app/lo/lo_pool.py`）
 
-`vlm` / `langgraph` 引擎需先將 Word / Excel 等 Office 文件轉為 PDF。預設（`LO_POOL_SIZE=0`）每次請求冷啟動一個 `soffice.exe`；設定 `LO_POOL_SIZE>0` 後，服務啟動時會常駐 N 個 `soffice` daemon，轉檔改走 UNO 橋接（`app/lo/lo_convert_script.py`，由 LibreOffice Portable 隨附的 `python.exe` 執行），省去每次啟動 LibreOffice 的開銷。
+`vlm` / `langgraph` 引擎需先將 Word / Excel 等 Office 文件轉為 PDF。預設（`LO_POOL_SIZE=0`）每次請求冷啟動一個 `soffice.exe`；設定 `LO_POOL_SIZE>0` 後，服務啟動時會常駐 N 個 `soffice` daemon，轉檔改走 UNO 橋接（`app/lo/lo_convert_script.py`，由 LibreOffice 隨附的 `python.exe` 執行，`LIBREOFFICE_DIR` 所指目錄的 `program/` 下須有 `python.exe`），省去每次啟動 LibreOffice 的開銷。
 
 - 所有 Worker 忙碌時請求會排隊等待，超過 `LO_ACQUIRE_TIMEOUT` 秒則退回冷啟動；Worker 轉檔失敗會自動重啟並退回冷啟動，不影響請求結果。
 - 每個 Worker 佔用一個本機 TCP port（`127.0.0.1:LO_BASE_PORT+1` 起），請確認不與其他服務衝突。
@@ -517,7 +519,7 @@ N530_FoodExportationQA/
     │   ├── breakdown_preprocessing.py # NFKC 正規化與 Markdown 表格線性化工具
     │   └── breakdown_dlq.py    # 可選 JSONL dead-letter queue writer
     ├── lo/
-    │   ├── file_utils.py       # expand_to_image_pages()：PDF/Office → 逐頁 JPEG（Poppler），含 MD5 影像快取
+    │   ├── file_utils.py       # expand_to_image_pages()：PDF/Office → 逐頁 JPEG（Poppler，POPPLER_DIR），含 MD5 影像快取
     │   ├── lo_pool.py          # LibreOffice 常駐 Worker 池（LO_POOL_SIZE>0 啟用；逾時/失敗退回冷啟動）
     │   └── lo_convert_script.py # UNO 橋接轉檔腳本（由 LibreOffice Portable 隨附 python.exe 執行）
     ├── utils/
@@ -537,8 +539,8 @@ N530_FoodExportationQA/
 
 tools/                          # 離線工具（與主應用無相依，獨立安裝依賴；evaluation/ 例外，直接呼叫 app 解析引擎）
     ├── requirements.txt        # 獨立依賴（PyPDF2, requests, openai, psycopg[binary], markitdown）
-    ├── poppler/                # Poppler for Windows（不入版控，自行放置 bin/）
-    ├── LibreOfficePortable/    # LibreOffice Portable（不入版控，自行放置）
+    ├── poppler/                # Poppler for Windows（不入版控，自行放置 bin/；或以 POPPLER_DIR 指向其他位置）
+    ├── LibreOfficePortable/    # LibreOffice Portable（不入版控，自行放置；或以 LIBREOFFICE_DIR 指向其他位置）
     ├── data/                   # 離線萃取之 CSV 專有名詞辭典（terms.csv / new_terms.csv）
     ├── evaluation/             # 問卷解析評估：evaluate_breakdown(_v2 / _vlm / _langgraph).py
     ├── ingestion/

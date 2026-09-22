@@ -33,13 +33,9 @@ from app.config import Settings
 
 logger = logging.getLogger(__name__)
 
-# LibreOffice Portable 路徑（相對於此模組上兩層目錄）
-_LO_PROGRAM_DIR: Path = (
-    Path(__file__).parent.parent.parent / "tools" / "LibreOfficePortable" / "App"
-    / "libreoffice" / "program"
-)
-_SOFFICE_EXE: Path = _LO_PROGRAM_DIR / "soffice.exe"
-_LO_PYTHON_EXE: Path = _LO_PROGRAM_DIR / "python.exe"
+_PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent.parent
+# 未設定 LIBREOFFICE_DIR 時的預設 LibreOffice 目錄
+_DEFAULT_LO_DIR: Path = _PROJECT_ROOT / "tools" / "LibreOfficePortable"
 _CONVERT_SCRIPT: Path = Path(__file__).parent / "lo_convert_script.py"
 
 # TCP 就緒輪詢設定
@@ -56,6 +52,29 @@ def _kill_process_tree(proc: subprocess.Popen) -> None:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+
+
+def resolve_lo_program_dir(libreoffice_dir: str = "") -> Path:
+    """解析 LibreOffice 的 program 目錄（soffice.exe / python.exe 所在處）。
+
+    libreoffice_dir 為空時使用 tools/LibreOfficePortable；相對路徑以專案根目錄為基準
+    （NSSM 服務的工作目錄不一定是專案目錄）。依序嘗試下列結構，取第一個含 soffice.exe 者：
+
+    - ``{dir}/App/libreoffice/program``：LibreOffice Portable
+    - ``{dir}/program``：一般安裝版（如 C:/Program Files/LibreOffice）
+    - ``{dir}``：直接指定 program 目錄
+
+    皆不存在時回傳 Portable 結構路徑，供呼叫端產生錯誤訊息。
+    """
+    raw = (libreoffice_dir or "").strip()
+    base = Path(raw).expanduser() if raw else _DEFAULT_LO_DIR
+    if not base.is_absolute():
+        base = _PROJECT_ROOT / base
+    candidates = [base / "App" / "libreoffice" / "program", base / "program", base]
+    for cand in candidates:
+        if (cand / "soffice.exe").exists():
+            return cand
+    return candidates[0]
 
 
 async def _wait_for_port(host: str, port: int, timeout: float) -> None:
@@ -81,8 +100,10 @@ async def _wait_for_port(host: str, port: int, timeout: float) -> None:
 class LibreOfficeWorker:
     """封裝單一 LibreOffice daemon 實例的生命週期。"""
 
-    def __init__(self, worker_id: int, base_port: int) -> None:
+    def __init__(self, worker_id: int, base_port: int, program_dir: Path) -> None:
         self.worker_id: int = worker_id
+        self._soffice_exe: Path = program_dir / "soffice.exe"
+        self._python_exe: Path = program_dir / "python.exe"
         self.port: int = base_port + worker_id + 1   # base=2000 → 2001, 2002, …
         self.conversion_count: int = 0
         # 以 subprocess.Popen 管理：main.py 在 Windows 使用 SelectorEventLoop（psycopg 需要），
@@ -100,7 +121,7 @@ class LibreOfficeWorker:
         profile_uri = profile_root.as_uri()
 
         cmd = [
-            str(_SOFFICE_EXE),
+            str(self._soffice_exe),
             f"-env:UserInstallation={profile_uri}",
             "--headless",
             "--invisible",
@@ -157,7 +178,7 @@ class LibreOfficeWorker:
 
         proc = subprocess.Popen(
             [
-                str(_LO_PYTHON_EXE),
+                str(self._python_exe),
                 str(_CONVERT_SCRIPT),
                 str(self.port),
                 str(docx_path.resolve()),
@@ -259,9 +280,10 @@ class LibreOfficePool:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         size = max(0, settings.lo_pool_size)
+        program_dir = resolve_lo_program_dir(settings.libreoffice_dir)
         self._queue: asyncio.Queue[LibreOfficeWorker] = asyncio.Queue(maxsize=size)
         self._workers: list[LibreOfficeWorker] = [
-            LibreOfficeWorker(i, settings.lo_base_port) for i in range(size)
+            LibreOfficeWorker(i, settings.lo_base_port, program_dir) for i in range(size)
         ]
         self._init_task: asyncio.Task[None] | None = None  # 背景預熱 task，用於 shutdown 時取消
 
@@ -404,14 +426,15 @@ async def init_lo_pool(settings: Settings) -> None:
     if settings.lo_pool_size <= 0:
         logger.info("[lo_pool] LO_POOL_SIZE=0，停用資源池（轉檔採冷啟動）")
         return
-    if not _SOFFICE_EXE.exists() or not _LO_PYTHON_EXE.exists():
-        logger.warning("[lo_pool] 找不到 LibreOffice Portable（%s），停用資源池", _LO_PROGRAM_DIR)
+    program_dir = resolve_lo_program_dir(settings.libreoffice_dir)
+    if not (program_dir / "soffice.exe").exists() or not (program_dir / "python.exe").exists():
+        logger.warning("[lo_pool] 找不到 LibreOffice（%s 需含 soffice.exe 與 python.exe），停用資源池", program_dir)
         return
 
     _pool = LibreOfficePool(settings)
     logger.info(
-        "[lo_pool] 建立資源池：size=%d base_port=%d max_conversions=%d eager=%s",
-        settings.lo_pool_size, settings.lo_base_port, settings.lo_max_conversions, settings.lo_pool_eager,
+        "[lo_pool] 建立資源池：size=%d base_port=%d max_conversions=%d eager=%s program_dir=%s",
+        settings.lo_pool_size, settings.lo_base_port, settings.lo_max_conversions, settings.lo_pool_eager, program_dir,
     )
     if settings.lo_pool_eager:
         await _pool.initialize()

@@ -81,6 +81,26 @@ class Settings(BaseSettings):
         description="保留 VLM 轉檔圖片的快取根目錄路徑",
     )
 
+    # LibreOffice 路徑（Office → PDF 轉檔）
+    libreoffice_dir: str = Field(
+        default="",
+        description=(
+            "LibreOffice 資料夾路徑；空字串使用 tools/LibreOfficePortable。"
+            "可指定 Portable 根目錄、一般安裝目錄（如 C:/Program Files/LibreOffice）或 program 目錄；"
+            "相對路徑以專案根目錄為基準"
+        ),
+    )
+
+    # Poppler 路徑（PDF → JPEG）
+    poppler_dir: str = Field(
+        default="",
+        description=(
+            "Poppler 資料夾路徑；空字串使用 tools/poppler。"
+            "可指定官方 release 根目錄（含 Library/bin）、含 bin/ 的目錄或 bin 目錄本身；"
+            "相對路徑以專案根目錄為基準"
+        ),
+    )
+
     # LibreOffice Daemon Worker Pool (app/lo/lo_pool.py)
     lo_pool_size: int = Field(
         default=0,

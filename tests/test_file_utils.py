@@ -10,10 +10,12 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from app.config import Settings
+from app.lo import file_utils
 from app.lo.file_utils import (
     _save_cached_images,
     _try_load_cached_images,
     expand_to_image_pages,
+    resolve_poppler_bin_dir,
 )
 
 
@@ -153,6 +155,47 @@ class FileUtilsLibreOfficePoolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pages, self.pages)
         self.assertEqual(worker.calls, 1)
         cold.assert_called_once()
+
+
+
+class ResolvePopplerBinDirTests(unittest.TestCase):
+    """POPPLER_DIR 解析：預設 tools 目錄、Library/bin / bin / 直接指定 bin 目錄結構。"""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _make_bin(self, path: Path) -> Path:
+        path.mkdir(parents=True, exist_ok=True)
+        (path / "pdftoppm.exe").write_bytes(b"")
+        return path
+
+    def test_default_uses_tools_poppler(self):
+        expected = file_utils._DEFAULT_POPPLER_DIR / "bin"
+        self.assertEqual(resolve_poppler_bin_dir(""), expected)
+
+    def test_release_zip_layout(self):
+        bin_dir = self._make_bin(self.tmp / "poppler-24.08.0" / "Library" / "bin")
+        self.assertEqual(resolve_poppler_bin_dir(str(self.tmp / "poppler-24.08.0")), bin_dir)
+
+    def test_bin_layout(self):
+        bin_dir = self._make_bin(self.tmp / "poppler" / "bin")
+        self.assertEqual(resolve_poppler_bin_dir(str(self.tmp / "poppler")), bin_dir)
+
+    def test_bin_dir_directly(self):
+        bin_dir = self._make_bin(self.tmp / "bin")
+        self.assertEqual(resolve_poppler_bin_dir(str(bin_dir)), bin_dir)
+
+    def test_relative_path_is_based_on_project_root(self):
+        self.assertEqual(resolve_poppler_bin_dir("some/poppler"), file_utils._PROJECT_ROOT / "some" / "poppler" / "bin")
+
+    def test_pdf_to_image_pages_raises_when_poppler_missing(self):
+        settings = Settings(poppler_dir=str(self.tmp / "missing"))
+        with patch("app.config.get_settings", return_value=settings):
+            with self.assertRaisesRegex(FileNotFoundError, "POPPLER_DIR"):
+                file_utils._pdf_to_image_pages(self.tmp / "x.pdf")
 
 
 if __name__ == "__main__":
