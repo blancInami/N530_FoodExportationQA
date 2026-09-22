@@ -23,12 +23,13 @@ import asyncio
 import logging
 import shutil
 import socket
+import subprocess
 import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
 
-from app.core.config import Settings
+from app.config import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,17 @@ _CONVERT_SCRIPT: Path = Path(__file__).parent / "lo_convert_script.py"
 # TCP 就緒輪詢設定
 _READY_POLL_INTERVAL: float = 0.5   # 秒
 _READY_TIMEOUT: float = 60.0        # 秒
+_CONVERT_TIMEOUT: float = 120.0     # 秒，單次 UNO 轉檔上限
+
+
+def _kill_process_tree(proc: subprocess.Popen) -> None:
+    """同步：強制終止行程及其所有子行程（taskkill /T）。"""
+    if proc.poll() is None:
+        subprocess.run(
+            ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
 
 
 async def _wait_for_port(host: str, port: int, timeout: float) -> None:
@@ -73,7 +85,9 @@ class LibreOfficeWorker:
         self.worker_id: int = worker_id
         self.port: int = base_port + worker_id + 1   # base=2000 → 2001, 2002, …
         self.conversion_count: int = 0
-        self._process: asyncio.subprocess.Process | None = None
+        # 以 subprocess.Popen 管理：main.py 在 Windows 使用 SelectorEventLoop（psycopg 需要），
+        # 該 loop 不支援 asyncio.create_subprocess_exec，故子行程一律走同步 API + asyncio.to_thread
+        self._process: subprocess.Popen | None = None
         self._profile_root: Path | None = None   # tempdir，每次 start() 重建
 
     # ── lifecycle ────────────────────────────────────────────────────────────
@@ -102,10 +116,10 @@ class LibreOfficeWorker:
             self.worker_id, self.port, profile_root,
         )
 
-        self._process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
+        self._process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
 
         try:
@@ -141,16 +155,31 @@ class LibreOfficeWorker:
             self.worker_id, docx_path.name, self.port,
         )
 
-        proc = await asyncio.create_subprocess_exec(
-            str(_LO_PYTHON_EXE),
-            str(_CONVERT_SCRIPT),
-            str(self.port),
-            str(docx_path.resolve()),
-            str(output_pdf.resolve()),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        proc = subprocess.Popen(
+            [
+                str(_LO_PYTHON_EXE),
+                str(_CONVERT_SCRIPT),
+                str(self.port),
+                str(docx_path.resolve()),
+                str(output_pdf.resolve()),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
-        stdout_b, stderr_b = await proc.communicate()
+        try:
+            stdout_b, stderr_b = await asyncio.to_thread(proc.communicate, timeout=_CONVERT_TIMEOUT)
+        except subprocess.TimeoutExpired as exc:
+            # LO 隨附的 python.exe 為 launcher，實際直譯器為其子行程且持有 pipe；
+            # 僅 kill launcher 會使 communicate() 永久阻塞，故以 taskkill /T 終止整棵行程樹
+            await asyncio.to_thread(_kill_process_tree, proc)
+            await asyncio.to_thread(proc.communicate)
+            raise RuntimeError(
+                f"worker_{self.worker_id} UNO 轉換逾時（>{_CONVERT_TIMEOUT:.0f}s）"
+            ) from exc
+        except asyncio.CancelledError:
+            # 請求被取消：終止行程樹後，背景執行緒中的 communicate() 會隨 pipe 關閉而返回
+            await asyncio.shield(asyncio.to_thread(_kill_process_tree, proc))
+            raise
         stdout = stdout_b.decode("utf-8", errors="replace").strip()
         stderr = stderr_b.decode("utf-8", errors="replace").strip()
 
@@ -184,10 +213,10 @@ class LibreOfficeWorker:
             self._process = None
             try:
                 proc.terminate()
-                await asyncio.wait_for(proc.wait(), timeout=5.0)
+                await asyncio.to_thread(proc.wait, 5.0)
             except ProcessLookupError:
                 pass
-            except asyncio.TimeoutError:
+            except subprocess.TimeoutExpired:
                 logger.warning(
                     "[lo_pool] worker_%d terminate 逾時，強制 kill pid=%s",
                     self.worker_id, proc.pid,
@@ -229,10 +258,10 @@ class LibreOfficePool:
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
-        size = max(0, settings.LO_POOL_SIZE)
+        size = max(0, settings.lo_pool_size)
         self._queue: asyncio.Queue[LibreOfficeWorker] = asyncio.Queue(maxsize=size)
         self._workers: list[LibreOfficeWorker] = [
-            LibreOfficeWorker(i, settings.LO_BASE_PORT) for i in range(size)
+            LibreOfficeWorker(i, settings.lo_base_port) for i in range(size)
         ]
         self._init_task: asyncio.Task[None] | None = None  # 背景預熱 task，用於 shutdown 時取消
 
@@ -277,7 +306,7 @@ class LibreOfficePool:
 
     async def release(self, worker: LibreOfficeWorker) -> None:
         """歸還 Worker；達到轉檔上限時先回收重啟再放回。"""
-        if worker.conversion_count >= self._settings.LO_MAX_CONVERSIONS:
+        if worker.conversion_count >= self._settings.lo_max_conversions:
             logger.info(
                 "[lo_pool] worker_%d 達到轉檔上限（%d），執行回收重啟",
                 worker.worker_id, worker.conversion_count,
@@ -294,15 +323,19 @@ class LibreOfficePool:
         await self._queue.put(worker)
 
     @asynccontextmanager
-    async def acquire_context(self) -> AsyncIterator[LibreOfficeWorker]:
+    async def acquire_context(self, timeout: float | None = None) -> AsyncIterator[LibreOfficeWorker]:
         """context manager：自動取得與歸還 Worker；轉檔失敗時重啟後歸還。
+
+        Args:
+            timeout: 等待閒置 Worker 的秒數上限；None 表示無限等待。
+                     逾時拋出 asyncio.TimeoutError（尚未取得 Worker，無需歸還）。
 
         使用方式::
 
             async with pool.acquire_context() as worker:
                 pdf = await worker.convert(docx, out_dir)
         """
-        worker = await self.acquire()
+        worker = await asyncio.wait_for(self.acquire(), timeout=timeout)
         failed = False
         try:
             yield worker
@@ -350,3 +383,45 @@ class LibreOfficePool:
             except Exception:
                 logger.exception("[lo_pool] worker_%d shutdown 時發生錯誤", worker.worker_id)
         logger.info("[lo_pool] 所有 Worker 已關閉")
+
+
+# ── Global pool lifecycle ─────────────────────────────────────────────────────
+
+_pool: LibreOfficePool | None = None
+
+
+def get_lo_pool() -> LibreOfficePool | None:
+    """回傳全域資源池；未啟用（LO_POOL_SIZE=0）或尚未初始化時回傳 None。"""
+    return _pool
+
+
+async def init_lo_pool(settings: Settings) -> None:
+    """依設定建立全域資源池（FastAPI lifespan 啟動時呼叫）。
+
+    LO_POOL_EAGER=true 時等待所有 Worker 就緒；否則背景預熱，服務立即可用。
+    """
+    global _pool
+    if settings.lo_pool_size <= 0:
+        logger.info("[lo_pool] LO_POOL_SIZE=0，停用資源池（轉檔採冷啟動）")
+        return
+    if not _SOFFICE_EXE.exists() or not _LO_PYTHON_EXE.exists():
+        logger.warning("[lo_pool] 找不到 LibreOffice Portable（%s），停用資源池", _LO_PROGRAM_DIR)
+        return
+
+    _pool = LibreOfficePool(settings)
+    logger.info(
+        "[lo_pool] 建立資源池：size=%d base_port=%d max_conversions=%d eager=%s",
+        settings.lo_pool_size, settings.lo_base_port, settings.lo_max_conversions, settings.lo_pool_eager,
+    )
+    if settings.lo_pool_eager:
+        await _pool.initialize()
+    else:
+        _pool.start_background()
+
+
+async def shutdown_lo_pool() -> None:
+    """關閉全域資源池（FastAPI lifespan 關閉時呼叫）。"""
+    global _pool
+    if _pool is not None:
+        await _pool.shutdown()
+        _pool = None

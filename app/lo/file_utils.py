@@ -11,11 +11,9 @@ import hashlib
 import json
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING
 import shutil
-if TYPE_CHECKING:
-    from app.lo.lo_pool import LibreOfficeWorker
 from app.config import Settings, get_settings
+from app.lo.lo_pool import LibreOfficeWorker, get_lo_pool
 logger = logging.getLogger(__name__)
 
 # Poppler bin 路徑（由此模組位置計算，不受 CWD 影響）
@@ -202,7 +200,8 @@ async def expand_to_image_pages(
     - PDF（.pdf）        → 逐頁轉 JPEG base64
     - Office 文件        → LibreOffice 轉 PDF，再逐頁轉 JPEG base64
       (.doc/.docx/.odt/.rtf / .xls/.xlsx/.ods / .ppt/.pptx/.odp)
-      有 worker 時走 UNO 長駐池，無 worker 時 fallback 冷啟動
+      有 worker 時直接使用；否則若已啟用全域資源池（LO_POOL_SIZE>0）則向池借用，
+      池未啟用、借用逾時或轉檔失敗時 fallback 冷啟動
     - 圖片（.jpg/.png 等）→ 修正 MIME 類型後直接回傳單頁
     - 其他               → 原樣包成單頁回傳（MIME 不修正）
 
@@ -210,7 +209,7 @@ async def expand_to_image_pages(
         raw:      上傳檔案原始位元組。
         mime_type: 上游提供的 MIME 類型字串（可能不準確，副檔名優先）。
         filename:  原始檔名（用於副檔名辨識）。
-        worker:   LibreOfficeWorker 實例；提供時走 UNO 池模式，None 時退回冷啟動。
+        worker:   LibreOfficeWorker 實例；提供時走 UNO 池模式，None 時改用全域資源池或冷啟動。
 
     Returns:
         list of dicts，每個 dict 包含 ``content_b64`` 與 ``mime_type``。
@@ -251,10 +250,20 @@ async def expand_to_image_pages(
             logger.debug("[file_utils] 已保存上傳文件至暫存：%s", src_path)
             
             t_lo_start = asyncio.get_event_loop().time()
+            pdf_path: Path | None = None
             if worker is not None:
                 logger.info("[file_utils] [LibreOffice] 使用 Daemon Worker 池進行轉檔...")
                 pdf_path = await worker.convert(src_path, tmp_path)
-            else:
+            elif (pool := get_lo_pool()) is not None:
+                try:
+                    async with pool.acquire_context(timeout=settings.lo_acquire_timeout) as pooled_worker:
+                        logger.info("[file_utils] [LibreOffice] 使用 Daemon Worker 池 (worker_%d) 進行轉檔...", pooled_worker.worker_id)
+                        pdf_path = await pooled_worker.convert(src_path, tmp_path)
+                except asyncio.TimeoutError:
+                    logger.warning("[file_utils] [LibreOffice] 等待閒置 Worker 逾時 (%.0fs)，退回冷啟動轉檔", settings.lo_acquire_timeout)
+                except Exception as e:
+                    logger.warning("[file_utils] [LibreOffice] Worker 池轉檔失敗，退回冷啟動轉檔：%s", e)
+            if pdf_path is None:
                 logger.info("[file_utils] [LibreOffice] 啟動 LibreOffice Portable (headless) 進行轉檔...")
                 pdf_path = await loop.run_in_executor(
                     None, _docx_to_pdf_via_libreoffice, src_path, tmp_path

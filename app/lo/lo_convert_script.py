@@ -12,6 +12,7 @@ Exit code：
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -137,4 +138,17 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+        exit_code = 0
+    except SystemExit as exc:
+        exit_code = exc.code if isinstance(exc.code, int) else 1
+    except BaseException:
+        import traceback
+        traceback.print_exc()
+        exit_code = 1
+    # 以 os._exit 結束：pyuno 的 URP bridge 執行緒在直譯器正常關閉時可能永久卡住，
+    # 導致轉檔已完成但行程不結束（呼叫端 subprocess 永遠等不到回應）
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(exit_code)

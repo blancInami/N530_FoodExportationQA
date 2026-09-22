@@ -16,7 +16,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
 from app.logging_config import setup_logging
+from app.config import get_settings
 from app.database import init_engine, close_engine
+from app.lo.lo_pool import init_lo_pool, shutdown_lo_pool
 from app.routers import qa, translate
 
 logger = logging.getLogger(__name__)
@@ -28,9 +30,11 @@ async def lifespan(app: FastAPI):
     setup_logging()
     logger.info("啟動 N530_FoodExportationQA ...")
     await init_engine()
+    await init_lo_pool(get_settings())
     logger.info("應用程式啟動完成")
     yield
     logger.info("關閉 N530_FoodExportationQA ...")
+    await shutdown_lo_pool()
     await close_engine()
     logger.info("應用程式關閉完成")
 

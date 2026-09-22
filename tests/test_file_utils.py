@@ -1,4 +1,6 @@
+import asyncio
 import base64
+import contextlib
 import hashlib
 import json
 import shutil
@@ -80,6 +82,77 @@ class FileUtilsCacheTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(pages), 1)
         expected_b64 = base64.b64encode(b"cached_image_data").decode("ascii")
         self.assertEqual(pages[0]["content_b64"], expected_b64)
+
+
+class _FakeWorker:
+    worker_id = 0
+
+    def __init__(self, fail: bool = False):
+        self.fail = fail
+        self.calls = 0
+
+    async def convert(self, src: Path, out_dir: Path) -> Path:
+        self.calls += 1
+        if self.fail:
+            raise RuntimeError("UNO 轉換失敗")
+        pdf = out_dir / (src.stem + ".pdf")
+        pdf.write_bytes(b"%PDF-fake")
+        return pdf
+
+
+class _FakePool:
+    def __init__(self, worker: _FakeWorker | None = None, timeout: bool = False):
+        self.worker = worker
+        self.timeout = timeout
+
+    @contextlib.asynccontextmanager
+    async def acquire_context(self, timeout=None):
+        if self.timeout:
+            raise asyncio.TimeoutError
+        yield self.worker
+
+
+def _fake_cold_convert(src: Path, out_dir: Path) -> Path:
+    pdf = out_dir / (src.stem + ".pdf")
+    pdf.write_bytes(b"%PDF-cold")
+    return pdf
+
+
+class FileUtilsLibreOfficePoolTests(unittest.IsolatedAsyncioTestCase):
+    """Office 轉檔路徑：全域資源池借用、逾時與失敗時退回冷啟動。"""
+
+    def setUp(self):
+        self.settings = Settings(vlm_save_temp_images=False, lo_acquire_timeout=1.0)
+        self.pages = [{"content_b64": "eA==", "mime_type": "image/jpeg"}]
+
+    async def _expand(self, pool):
+        with patch("app.lo.file_utils.get_settings", return_value=self.settings),              patch("app.lo.file_utils.get_lo_pool", return_value=pool),              patch("app.lo.file_utils._pdf_to_image_pages", return_value=self.pages),              patch("app.lo.file_utils._docx_to_pdf_via_libreoffice", side_effect=_fake_cold_convert) as cold:
+            pages = await expand_to_image_pages(b"docx-bytes", "", "sample.docx")
+        return pages, cold
+
+    async def test_uses_pool_worker_when_enabled(self):
+        worker = _FakeWorker()
+        pages, cold = await self._expand(_FakePool(worker))
+        self.assertEqual(pages, self.pages)
+        self.assertEqual(worker.calls, 1)
+        cold.assert_not_called()
+
+    async def test_cold_start_when_pool_disabled(self):
+        pages, cold = await self._expand(None)
+        self.assertEqual(pages, self.pages)
+        cold.assert_called_once()
+
+    async def test_falls_back_to_cold_start_on_acquire_timeout(self):
+        pages, cold = await self._expand(_FakePool(timeout=True))
+        self.assertEqual(pages, self.pages)
+        cold.assert_called_once()
+
+    async def test_falls_back_to_cold_start_on_worker_failure(self):
+        worker = _FakeWorker(fail=True)
+        pages, cold = await self._expand(_FakePool(worker))
+        self.assertEqual(pages, self.pages)
+        self.assertEqual(worker.calls, 1)
+        cold.assert_called_once()
 
 
 if __name__ == "__main__":

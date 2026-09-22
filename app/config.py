@@ -81,6 +81,28 @@ class Settings(BaseSettings):
         description="保留 VLM 轉檔圖片的快取根目錄路徑",
     )
 
+    # LibreOffice Daemon Worker Pool (app/lo/lo_pool.py)
+    lo_pool_size: int = Field(
+        default=0,
+        description="LibreOffice 長駐 Worker 數量；0 表示停用資源池，每次轉檔冷啟動 soffice.exe",
+    )
+    lo_base_port: int = Field(
+        default=2000,
+        description="Worker UNO 監聽埠基準值；worker_i 使用 base+i+1（2001, 2002, …）",
+    )
+    lo_max_conversions: int = Field(
+        default=50,
+        description="單一 Worker 轉檔次數上限，達上限後自動回收重啟以釋放記憶體",
+    )
+    lo_pool_eager: bool = Field(
+        default=False,
+        description="true：啟動時等待所有 Worker 就緒才開始服務；false：背景預熱，服務立即可用",
+    )
+    lo_acquire_timeout: float = Field(
+        default=60.0,
+        description="等待閒置 Worker 的秒數上限；逾時則退回冷啟動轉檔",
+    )
+
     # Logging
     log_level: str = "INFO"
 
