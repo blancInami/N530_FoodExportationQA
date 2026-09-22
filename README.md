@@ -38,10 +38,14 @@
     └─ Phase 4 回傳組裝 → OpenCC s2t → AskResponse → 非同步寫入查詢紀錄
 
 
-系統模組分層（app/services/）
-  ├─ breakdown/              ─ 問卷解析引擎家族（v1 / v2 / vlm / langgraph / preprocessing / dlq）
-  ├─ core/                   ─ 核心基礎服務（llm / embedding / translate）
-  └─ qa/                     ─ 問答檢索與入庫（retrieval / intent / ingest / query_log）
+系統模組分層（app/，services/ 下為扁平結構）
+  ├─ services/
+  │    ├─ breakdown*.py      ─ 問卷解析引擎家族（breakdown=v1 / _v2 / _vlm / _langgraph / _preprocessing / _dlq）
+  │    ├─ llm / embedding / translate.py          ─ 核心基礎服務
+  │    └─ retrieval / intent / ingest / query_log.py ─ 問答檢索與入庫
+  ├─ lo/                     ─ Office → PDF → JPEG 轉檔（LibreOffice Portable + Poppler，含 MD5 影像快取與常駐 Worker 池）
+  ├─ utils/                  ─ 詞典比對、TOC 導航、題目清洗、HTML 格式化、Prompt 載入、斷線中斷機制
+  └─ resources/prompts/      ─ LangGraph 各節點系統提示詞（.txt，外部化管理）
 
 獨立離線工具（tools/）
   ├─ evaluation/             ─ 問卷解析精準度評估工具（全引擎支援）
@@ -66,11 +70,18 @@
 
 ### 1. 前置需求
 
-- Python 3.11+
+- Python 3.12（離線安裝包 `WindowsInstallRequirements/downloaded_packages/` 為 cp312 / win_amd64 版本）
 - PostgreSQL with `pgvector` extension installed，或 SQL Server 2025（原生 `VECTOR` 型別）
 - Embedding Server & LLM Server running (see `.env`)
+- `vlm` / `langgraph` 解析引擎需另行放置以下外部工具（皆不入版控，見 `.gitignore`）：
+  - `tools/poppler/bin/`：Poppler for Windows（PDF → JPEG）
+  - `tools/LibreOfficePortable/`：LibreOffice Portable（Office → PDF）
 
-### 2. 建立虛擬環境
+### 2. 建立虛擬環境並安裝依賴
+
+**Windows 離線安裝（部署主機建議）**：執行 `create_venv.bat`，會以 Python 3.12 重建 `venv/`，並從 `WindowsInstallRequirements/downloaded_packages/` 離線安裝 `requirements.txt` 全部套件（`pip install --no-index`），不需對外網路。
+
+**線上安裝（開發機）**：
 
 ```bash
 python -m venv venv
@@ -78,20 +89,26 @@ python -m venv venv
 venv\Scripts\activate
 # Linux/macOS
 source venv/bin/activate
-```
 
-### 3. 安裝依賴
-
-```bash
 pip install -r requirements.txt
 ```
 
-### 4. 設定環境變數
+> **維護離線安裝包**：`requirements.txt` 新增或變更套件版本時，須同步更新離線包，否則 `create_venv.bat` 會因找不到套件而失敗：
+>
+> ```bash
+> pip download -r requirements.txt -d WindowsInstallRequirements/downloaded_packages ^
+>     --platform win_amd64 --python-version 3.12 --implementation cp --only-binary=:all: --no-deps
+> ```
+>
+> `requirements.txt` 為完整 freeze 清單（含間接依賴），故使用 `--no-deps`。更新後請移除舊版本 wheel，並以
+> `pip install --dry-run --ignore-installed --no-index --find-links=WindowsInstallRequirements/downloaded_packages -r requirements.txt` 驗證可完整解析。
 
-複製 `.env` 並依實際環境調整：
+### 3. 設定環境變數
+
+複製 `.env.sample` 為 `.env` 並依實際環境調整：
 
 ```bash
-cp .env .env.local
+cp .env.sample .env
 ```
 
 | 變數 | 預設值 | 說明 |
@@ -130,14 +147,61 @@ cp .env .env.local
 | `BREAKDOWN_DLQ_PATH` | `logs/breakdown-dlq.jsonl` | JSONL dead-letter queue 的輸出路徑 |
 | `BREAKDOWN_DLQ_INCLUDE_RAW_PAYLOAD` | `false` | 是否在 DLQ 保存截斷後原始內容；預設僅保存 SHA-256 摘要 |
 | `RETRIEVAL_MERGE_MODE` | `independent` | 雙軌合併策略：`independent`（各軌獨立取 top_n）/ `compete`（兩軌共用 top_n 配額） |
+| `BREAKDOWN_ENGINE` | `v1` | `/qa/breakdown` 解析引擎：`v1` / `v2` / `vlm` / `langgraph`（見下方「核心解析引擎」） |
+| `VLM_MODEL` | 空字串 | 視覺模型名稱；空字串沿用 `LLM_MODEL` |
+| `VLM_URL` | 空字串 | 視覺模型端點；空字串沿用 `LLM_HOST:LLM_PORT` |
+| `VLM_MAX_CONCURRENCY` | `4` | `vlm` 引擎逐頁並行推論上限 |
+| `VLM_DPI` | `150` | PDF 逐頁轉 JPEG 的解析度 |
+| `VLM_INPUT_MODE` | `images` | `images`（轉 JPEG）/ `pdf_direct`（直傳 PDF base64） |
+| `VLM_SAVE_TEMP_IMAGES` | `false` | 以檔案 MD5 快取轉檔後的逐頁影像，相同檔案再次上傳時跳過轉檔 |
+| `VLM_TEMP_IMAGES_DIR` | `temp_images` | 影像快取根目錄（`{dir}/{md5}/page_001.jpg …`） |
+| `LO_POOL_SIZE` | `0` | LibreOffice 常駐 Worker 數量；`0` 停用，每次轉檔冷啟動 `soffice.exe`（見下方說明） |
+| `LO_BASE_PORT` | `2000` | Worker UNO 監聽埠基準值；`worker_i` 使用 `LO_BASE_PORT+i+1` |
+| `LO_MAX_CONVERSIONS` | `50` | 單一 Worker 轉檔次數上限，達上限自動回收重啟以釋放記憶體 |
+| `LO_POOL_EAGER` | `false` | `true`：啟動時等待所有 Worker 就緒；`false`：背景預熱，服務立即可用 |
+| `LO_ACQUIRE_TIMEOUT` | `60` | 等待閒置 Worker 的秒數上限，逾時退回冷啟動 |
 
-### 5. 啟動服務
+#### LibreOffice 常駐 Worker 池（`app/lo/lo_pool.py`）
+
+`vlm` / `langgraph` 引擎需先將 Word / Excel 等 Office 文件轉為 PDF。預設（`LO_POOL_SIZE=0`）每次請求冷啟動一個 `soffice.exe`；設定 `LO_POOL_SIZE>0` 後，服務啟動時會常駐 N 個 `soffice` daemon，轉檔改走 UNO 橋接（`app/lo/lo_convert_script.py`，由 LibreOffice Portable 隨附的 `python.exe` 執行），省去每次啟動 LibreOffice 的開銷。
+
+- 所有 Worker 忙碌時請求會排隊等待，超過 `LO_ACQUIRE_TIMEOUT` 秒則退回冷啟動；Worker 轉檔失敗會自動重啟並退回冷啟動，不影響請求結果。
+- 每個 Worker 佔用一個本機 TCP port（`127.0.0.1:LO_BASE_PORT+1` 起），請確認不與其他服務衝突。
+- 每個常駐 `soffice` 約佔 150–400 MB 記憶體，請依主機資源設定 `LO_POOL_SIZE`。
+
+### 4. 啟動服務
 
 ```bash
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 互動式 API 文件：http://localhost:8000/docs
+
+### 5. 安裝為 Windows 服務（NSSM）
+
+部署主機以 [NSSM](https://nssm.cc/) 將 `main.py` 註冊為 Windows 服務（服務名稱 `N530_FoodExportationQA`，直接執行 `python main.py`，監聽 port `5001`）。
+
+> ⚠️ **NSSM 不納入版控，須由安裝主機自行放置。**
+> Windows 服務註冊後，服務執行檔即指向 `WindowsInstallRequirements\nssm\win64\nssm.exe`；若更版時該檔案被覆蓋、刪除或於服務執行中被鎖定替換，會導致服務無法啟動或停止。因此 `WindowsInstallRequirements/nssm/` 已列入 `.gitignore`（僅保留 `.gitkeep`），更版不會再動到它。
+
+**首次安裝**
+
+1. 自 [nssm.cc/download](https://nssm.cc/download) 下載 NSSM **2.24-101-g897c7ad**（Featured pre-release，修正 2.24 正式版於 Windows 10 以後的服務啟動問題），解壓縮至 `WindowsInstallRequirements\nssm\`，確認路徑為 `WindowsInstallRequirements\nssm\win64\nssm.exe`（可執行 `nssm.exe version` 確認版本）。
+2. 完成「建立虛擬環境」與 `.env` 設定後，以系統管理員身分執行 `install_service.bat` 註冊服務。
+3. 於「服務」管理員或 `nssm start N530_FoodExportationQA` 啟動服務。
+4. 移除服務：以系統管理員身分執行 `delete_service.bat`。
+
+**從舊版更新（nssm 仍在版控時期的主機）**
+
+舊版曾將 `nssm/` 納入版控；拉取「改為 `.gitignore`」這一版時，git 會把原本追蹤的 nssm 檔案**從工作目錄刪除**。請依下列順序更新：
+
+1. 停止服務：`nssm stop N530_FoodExportationQA`（或於「服務」管理員停止）。
+2. 將 `WindowsInstallRequirements\nssm\` 整個資料夾複製到專案外暫存。
+3. 執行 `git pull`。
+4. 將暫存的 nssm 檔案複製回 `WindowsInstallRequirements\nssm\`。
+5. 重新啟動服務。
+
+之後的更版 git 不會再動到 `nssm/`，照常停止服務 → `git pull` → 啟動服務即可。
 
 ---
 
@@ -329,35 +393,52 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 ---
 
-#### 問卷解析評估工具（`tools/`）
+#### 問卷解析評估工具（`tools/evaluation/`）
 
 提供統一與專屬評估工具，對照黃金標準答案（`tests/data/*_解析結果.json`）評估 Precision、Recall 與 F1：
 
 ```bash
 # 1. 統一評估工具（支援所有模式：--mode langgraph | vlm | v2 | hybrid | structured）
-venv\Scripts\python.exe tools/evaluate_breakdown.py --input "tests/data/1_輸日禽畜肉品.docx" --expected "tests/data/1_輸日禽畜肉品_解析結果.json" --mode langgraph
+venv\Scripts\python.exe tools/evaluation/evaluate_breakdown.py --input "tests/data/1_輸日禽畜肉品.docx" --expected "tests/data/1_輸日禽畜肉品_解析結果.json" --mode langgraph
 
 # 2. 專屬 LangGraph 評估工具
-venv\Scripts\python.exe tools/evaluate_breakdown_langgraph.py --input "tests/data/3_澳洲水產品.md" --expected "tests/data/3_澳洲水產品_解析結果.json"
+venv\Scripts\python.exe tools/evaluation/evaluate_breakdown_langgraph.py --input "tests/data/3_澳洲水產品.docx" --expected "tests/data/3_澳洲水產品_解析結果.json"
 
 # 3. 專屬 V2 評估工具
-venv\Scripts\python.exe tools/evaluate_breakdown_v2.py --all
-```
+venv\Scripts\python.exe tools/evaluation/evaluate_breakdown_v2.py --all
 
-# 執行 parser + LLM + 來源題號校正的完整評估
-python tools/evaluate_breakdown.py --input "問卷.docx" --expected "人工解答.json" --mode hybrid --min-recall 0.95
+# 4. 執行 parser + LLM + 來源題號校正的完整評估（recall 品質閘門）
+venv\Scripts\python.exe tools/evaluation/evaluate_breakdown.py --input "問卷.docx" --expected "人工解答.json" --mode hybrid --min-recall 0.95
 ```
 
 當題號 recall 低於 `--min-recall` 時，工具會以 exit code `1` 結束，可作為回歸測試或 CI 品質閘門。
 報告也會提供 `toc_lines_removed` 與 `toc_detection_strategy`，用以確認目錄清理是否生效。
 
+#### 單元測試
+
+```bash
+pip install pytest pytest-asyncio   # 未列於 requirements.txt（僅開發機需要）
+venv\Scripts\python.exe -m pytest -q
+```
+
 ---
+
+## 專案結構
 
 ```
 N530_FoodExportationQA/
-├── .env                        # 環境變數（不入版控）
-├── requirements.txt
-├── main.py                     # FastAPI 應用程式入口（含 lifespan、CORS、請求日誌）
+├── .env.sample                 # 環境變數範本（複製為 .env，.env 不入版控）
+├── requirements.txt            # 完整 freeze 依賴清單（UTF-16 編碼）
+├── main.py                     # FastAPI 應用程式入口（lifespan：DB engine + LibreOffice Worker 池、CORS、請求日誌）
+├── create_venv.bat             # 以 Python 3.12 重建 venv 並離線安裝依賴
+├── install_service.bat         # 以 NSSM 註冊 Windows 服務
+├── delete_service.bat          # 移除 Windows 服務
+├── migrations/                 # 資料庫 Schema 遷移 SQL（PostgreSQL / SQL Server）
+├── docs/architecture.html      # 架構說明頁
+├── tests/                      # 單元測試；tests/data/ 放問卷範例檔與人工標註解析結果
+├── WindowsInstallRequirements/
+│   ├── downloaded_packages/    # 離線安裝用 wheel（cp312 / win_amd64）
+│   └── nssm/                   # NSSM（不入版控，安裝主機自行放置，見「安裝為 Windows 服務」）
 └── app/
     ├── config.py               # Pydantic Settings；依 DB_TYPE 產生 PostgreSQL 或 SQL Server DSN
     ├── database.py             # SQLAlchemy async engine + sessionmaker，init_engine()/close_engine()
@@ -366,15 +447,16 @@ N530_FoodExportationQA/
     ├── logging_config.py       # 結構化 logging 初始化
     ├── models.py               # SQLAlchemy Core Table() 定義（11 張資料表，含查詢紀錄與知識文獻三表）
     ├── routers/
-    │   ├── qa.py               # /api/v1/qa/ask, /api/v1/qa/ingest, /api/v1/qa/breakdown
+    │   ├── qa.py               # /api/v1/qa/ask, /api/v1/qa/ingest, /api/v1/qa/breakdown（依 BREAKDOWN_ENGINE 分派）
     │   └── translate.py        # /api/v1/translation/re-translate
     ├── schemas/
     │   ├── qa.py               # AskRequest / AskResponse / ReferenceSource / KnowledgeReferenceSource / IngestRequest
     │   ├── translate.py        # TranslateRequest / TranslateResponse
-    │   └── breakdown.py        # BreakdownItem
+    │   ├── breakdown.py        # BreakdownQuestion（別名 BreakdownItem）/ BreakdownSectionDetail（depiction + question）
+    │   └── langgraph.py        # QuestionnaireState / OutlineItem / TocAnchor（LangGraph 狀態機型別）
     ├── services/
     │   ├── embedding.py        # 呼叫遠端 Embedding Server
-    │   ├── llm.py              # 呼叫遠端 LLM Server
+    │   ├── llm.py              # 呼叫遠端 LLM Server：chat_completion() / chat_completion_vision()（串流、可中斷）
     │   ├── intent.py           # IntentClassifier 雙層意圖分類：
     │   │                       #   Layer 1 Aho-Corasick（分工關鍵字 + 擴充關鍵字 + alias_mapping.json 別名）
     │   │                       #   Layer 2 llm_fallback_classify()（LLM 全量列兜底，命中數不足時觸發）
@@ -382,42 +464,53 @@ N530_FoodExportationQA/
     │   ├── ingest.py           # 問卷滑動視窗切塊 + tiktoken + SQLAlchemy insert
     │   ├── query_log.py        # /qa/ask 完整管線內容非同步寫入查詢紀錄
     │   ├── translate.py        # 官方詞彙翻譯（DictionaryMatcher 篩選）
-    │   ├── breakdown.py        # 問卷檔案 → parser-owned candidates → LLM 文字萃取
+    │   ├── breakdown.py        # v1：問卷檔案 → parser-owned candidates → LLM 文字萃取
+    │   ├── breakdown_v2.py     # v2：Markdown 全域骨架 → 祖先路徑並行萃取 → 全局審核
+    │   ├── breakdown_vlm.py    # vlm：逐頁影像骨架掃描 → 並行視覺推論 → 一致性校驗
+    │   ├── breakdown_langgraph.py # langgraph：TOC 索引 → 逐頁研讀 ⇄ 回讀審查 → 全局統整（StateGraph + MemorySaver）
     │   ├── breakdown_preprocessing.py # NFKC 正規化與 Markdown 表格線性化工具
     │   └── breakdown_dlq.py    # 可選 JSONL dead-letter queue writer
+    ├── lo/
+    │   ├── file_utils.py       # expand_to_image_pages()：PDF/Office → 逐頁 JPEG（Poppler），含 MD5 影像快取
+    │   ├── lo_pool.py          # LibreOffice 常駐 Worker 池（LO_POOL_SIZE>0 啟用；逾時/失敗退回冷啟動）
+    │   └── lo_convert_script.py # UNO 橋接轉檔腳本（由 LibreOffice Portable 隨附 python.exe 執行）
     ├── utils/
     │   ├── __init__.py         # sanitize_text_for_db, sliding_window_chunk, normalize_for_matching
     │   ├── dictionary.py       # DictionaryMatcher（Aho-Corasick）+ filter_by_text() + filter_by_text_grounded()
     │   │                       # + build_dictionary_xml()；從 term_mapping.json 載入短詞映射
+    │   ├── connection_manager.py # monitor_disconnect() / run_interruptible()：客戶端斷線即中斷長任務（HTTP 499）
+    │   ├── toc_navigator.py    # 章節大綱樹、頁面章節地圖、TOC 錨點校準、題號前綴歸屬、閱讀記憶摘要
+    │   ├── question_sanitizer.py # 偽題目過濾、子題號繼承修補、題號正規化、去重、斷尾 JSON 修復
+    │   ├── html_formatter.py   # Markdown 表格/勾選清單 → HTML、複合題目文字合併
+    │   ├── prompt_loader.py    # 載入 resources/prompts/ 下的提示詞檔
     │   └── opencc_converter.py # OpenCC 簡繁轉換 (s2t)
-    └── resources/              # 離線工具產出的靜態資源（不入版控；執行對應工具後產生）
-        ├── alias_mapping.json  # {標準分工關鍵字: [別名, ...]}，由 tools/extract_aliases.py 產出
-        └── term_mapping.json   # {短詞: 官方術語}，由 tools/extract_stems.py 產出
+    └── resources/
+        ├── prompts/langgraph/  # toc_indexer / page_analyzer / back_read_inspector / reducer_quality / memory_summary
+        ├── alias_mapping.json  # {標準分工關鍵字: [別名, ...]}，由 tools/term_extraction/extract_aliases.py 產出（不入版控）
+        └── term_mapping.json   # {短詞: 官方術語}，由 tools/term_extraction/extract_stems.py 產出（不入版控）
 
-tools/                          # 離線工具（與主應用無相依，獨立安裝依賴）
+tools/                          # 離線工具（與主應用無相依，獨立安裝依賴；evaluation/ 例外，直接呼叫 app 解析引擎）
     ├── requirements.txt        # 獨立依賴（PyPDF2, requests, openai, psycopg[binary], markitdown）
-    ├── ingest_agent.py         # CLI 入口：文件 → markitdown（→ doc-to-json 降級）→ Gemma-4 LLM → JSON nodes → INSERT 知識文獻三表
-    ├── batch_ingest_regulations.py # CLI 入口：批次掃描法規/REGULATION|GUIDELINE|QA 子資料夾，逐一呼叫 ingest_agent
-    ├── extract_stems.py        # CLI 入口：官方正規詞彙 → 規則式剝後綴 + Gemma-4 → term_mapping.json
-    ├── extract_aliases.py      # CLI 入口：單位對照表 → 分批 Gemma-4 → alias_mapping.json
-    ├── expand_keywords.py      # CLI 入口：分工關鍵字 → LLM 擴充 → 回寫單位對照表.擴充關鍵字
-    ├── db_utils.py             # 雙後端同步連線、Schema、占位符與陣列編碼抽象
-    ├── markdown_converter.py   # convert_to_markdown()（同步 markitdown 封裝）
-    ├── extract_terms.py        # CLI 入口：PDF 配對 → 擷取 → 匯出 CSV
-    │                           #   --workers N       並行處理數（預設 1）
-    │                           #   --no-structured   停用結構化解析（圖片型 PDF 用純 OCR）
-    ├── pdf_reader.py           # doc-to-json REST API 讀取 PDF
-    │                           #   read_pdf()            → 平文字字串（向下相容）
-    │                           #   read_pdf_structured() → list[Block]（type/text/page/order）
-    ├── db_extractor.py         # CLI 入口：問卷題目檔 HTML → 擷取 → 寫入官方正規詞彙
-    ├── llm_client.py           # Gemma 4 LLM 客戶端 + JSON 解析容錯
-    ├── file_pairing.py         # PDF 資料夾掃描 + 中英文配對（含遞迴走訪）
-    ├── chunking.py             # 文本切塊 + 比例索引對齊
-    │                           #   chunk_text()           字元滑動視窗（降級備用）
-    │                           #   chunk_by_structure()   結構化語意切塊（tiktoken token budget，title 邊界，table 獨立）
-    ├── validator.py            # 反向驗證（防幻覺：子字串比對）
-    └── aggregator.py           # 詞彙頻率聚合 + CSV 匯出
-                                #   英文字詞去重前統一轉小寫；CSV 欄位：中文字詞、英文字詞、出現頻率、負責單位、來源檔案
+    ├── poppler/                # Poppler for Windows（不入版控，自行放置 bin/）
+    ├── LibreOfficePortable/    # LibreOffice Portable（不入版控，自行放置）
+    ├── data/                   # 離線萃取之 CSV 專有名詞辭典（terms.csv / new_terms.csv）
+    ├── evaluation/             # 問卷解析評估：evaluate_breakdown(_v2 / _vlm / _langgraph).py
+    ├── ingestion/
+    │   ├── ingest_agent.py     # CLI：文件 → markitdown（→ doc-to-json 降級）→ Gemma-4 LLM → JSON nodes → INSERT 知識文獻三表
+    │   └── batch_ingest_regulations.py # CLI：批次掃描法規/REGULATION|GUIDELINE|QA 子資料夾，逐一呼叫 ingest_agent
+    └── term_extraction/
+        ├── extract_stems.py    # CLI：官方正規詞彙 → 規則式剝後綴 + Gemma-4 → term_mapping.json
+        ├── extract_aliases.py  # CLI：單位對照表 → 分批 Gemma-4 → alias_mapping.json
+        ├── expand_keywords.py  # CLI：分工關鍵字 → LLM 擴充 → 回寫單位對照表.擴充關鍵字
+        ├── extract_terms.py    # CLI：PDF 配對 → 擷取 → 匯出 CSV（--workers N、--no-structured）
+        ├── db_extractor.py     # CLI：問卷題目檔 HTML → 擷取 → 寫入官方正規詞彙
+        ├── db_utils.py         # 雙後端同步連線、Schema、占位符與陣列編碼抽象
+        ├── pdf_reader.py       # doc-to-json REST API 讀取 PDF（read_pdf() / read_pdf_structured()）
+        ├── llm_client.py       # Gemma 4 LLM 客戶端 + JSON 解析容錯
+        ├── file_pairing.py     # PDF 資料夾掃描 + 中英文配對（含遞迴走訪）
+        ├── chunking.py         # 文本切塊（chunk_text() 字元滑動視窗 / chunk_by_structure() 結構化語意切塊）
+        ├── validator.py        # 反向驗證（防幻覺：子字串比對）
+        └── aggregator.py       # 詞彙頻率聚合 + CSV 匯出
 ```
 
 ---
