@@ -59,3 +59,7 @@ tools/poppler/*
 !tools/poppler/.gitkeep
 !tools/LibreOfficePortable/
 tools/LibreOfficePortable/*
+# NSSM（Windows 服務管理工具）：由安裝主機自行放置，避免更版時覆蓋執行中服務所綁定的 nssm.exe
+!WindowsInstallRequirements/nssm/
+WindowsInstallRequirements/nssm/*
+!WindowsInstallRequirements/nssm/.gitkeep

@@ -513,9 +513,10 @@ async def final_reducer_node(state: QuestionnaireState) -> QuestionnaireState:
 
     appearance_order: list[str] = []
     section_questions: dict[str, list[dict]] = {}
+    section_first_appearance: dict[str, tuple[int, int]] = {}
 
     for p in sorted(history.keys()):
-        for q in history[p].get("extracted_questions", []):
+        for idx_in_page, q in enumerate(history[p].get("extracted_questions", [])):
             if isinstance(q, dict):
                 raw_qid = q.get("question_id", "")
                 sec = q.pop("_section_name", "")
@@ -527,16 +528,8 @@ async def final_reducer_node(state: QuestionnaireState) -> QuestionnaireState:
                     if final_sec and final_sec not in appearance_order:
                         appearance_order.append(final_sec)
                 section_questions[final_sec].append(q)
-
-    section_first_appearance: dict[str, tuple[int, int]] = {}
-    for p in sorted(history.keys()):
-        for idx_in_page, q in enumerate(history[p].get("extracted_questions", [])):
-            raw_qid = q.get("question_id", "")
-            sec = q.get("_section_name", "")
-            corrected_sec = extract_section_prefix_from_qid(raw_qid, section_order)
-            target_sec = corrected_sec if corrected_sec else (sec or (section_order[0] if section_order else "General"))
-            if target_sec and target_sec not in section_first_appearance:
-                section_first_appearance[target_sec] = (p, idx_in_page)
+                if final_sec and final_sec not in section_first_appearance:
+                    section_first_appearance[final_sec] = (p, idx_in_page)
 
     all_candidate_secs = list(dict.fromkeys([sn for sn in appearance_order if sn] + [sn for sn in section_order if sn in section_questions]))
     ordered_sections = sorted(
