@@ -339,24 +339,70 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 ### `POST /api/v1/qa/breakdown`
 
-問卷檔案題號萃取。上傳問卷原始檔（PDF / Word / Excel），自動解析並萃取所有英文題號與題目。
+問卷檔案題號萃取。上傳問卷原始檔（PDF / Word / Excel），自動解析並依區塊（Part / Section / Chapter）萃取所有英文題號與題目。
 
 **Request**：`multipart/form-data`，欄位名稱 `file`，支援格式：`pdf`, `doc`, `docx`, `xlsx`, `xls`
 
-**Response**
+**Response**（`list[dict[str, BreakdownSectionDetail]]`）
+
+回傳陣列，每個元素為**僅含一個 key 的物件**：key 為區塊代號，value 為該區塊的前言說明與題目列表。陣列順序即區塊在文件中的實體出現順序（頁碼 → 頁內位置）。
 
 ```json
 [
   {
-    "question_id": "2.2.1",
-    "question_text": "Are raw materials processed in a hygienic manner?"
+    "A": {
+      "depiction": "General Information\n\nThis part applies to live, chilled and frozen bivalve molluscs produced for export to the EU.",
+      "question": [
+        {
+          "question_id": "A.1",
+          "question_text": "<p>Please indicate the competent authority responsible for official controls.</p>"
+        },
+        {
+          "question_id": "A.2.a",
+          "question_text": "<p>Please provide details of approved establishments in the table below:</p><table border=\"1\"><thead><tr><th>Name</th><th>Approval No.</th></tr></thead><tbody><tr><td></td><td></td></tr></tbody></table>"
+        }
+      ]
+    }
   },
   {
-    "question_id": "1.2.4.a",
-    "question_text": "Provide details on certification equivalent to Directive 96/93/EC."
+    "B": {
+      "depiction": "",
+      "question": [
+        {
+          "question_id": "B.1",
+          "question_text": "<p>Are raw materials processed in a hygienic manner?</p>"
+        }
+      ]
+    }
   }
 ]
 ```
+
+| 欄位 | 型別 | 說明 |
+|------|------|------|
+| *（區塊 key）* | string | 純化後的區塊代號，例如 `A`、`Part A`、`C.A`、`Chapter II`；無法辨識區塊時為 `General` |
+| `depiction` | string | 區塊標題領域名稱與前言說明（段落間以 `\n\n` 分隔），不含題目問句；無則為空字串 |
+| `question` | list | 該區塊題目列表，依文件出現順序排列 |
+| `question[].question_id` | string | 扁平化、正規化後的題號，例如 `1`、`1.1`、`2.2.1`、`A.2.a`、`Part B.3`、`II.1.a`；子題 `(a)`、`(i)` 會自動展開為 `父題號.a`、`父題號.a.i` |
+| `question[].question_text` | string | 題目內容 HTML；隨附的表格、勾選清單會轉為 `<table>`、`<ul>` 等語意化標籤，已剝除題號前綴與填答底線 |
+
+**各引擎輸出差異**
+
+- `langgraph`：依文件實際章節切分為多個區塊，並填入 `depiction`。
+- `v1` / `v2` / `vlm`：解析結果為扁平題目清單，統一包裝為單一 `General` 區塊（`depiction` 為空字串）：
+
+  ```json
+  [{ "General": { "depiction": "", "question": [{ "question_id": "2.2.1", "question_text": "..." }] } }]
+  ```
+
+**錯誤回應**
+
+| 狀態碼 | 情境 |
+|--------|------|
+| `415` | 副檔名不在允許清單 |
+| `422` | 檔案轉換 Markdown 失敗（`v1` / `v2`） |
+| `502` | LLM / VLM 解析失敗 |
+| `499` | 客戶端於處理中斷線，任務已中止 |
 
 ---
 
